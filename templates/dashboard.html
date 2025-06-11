@@ -83,28 +83,129 @@
       border: 1px solid #4af;
       padding: 4px;
     }
-    /* Chat messages font size matching LLM Reasoning */
+    /* Chat messages font size - reduced to 40% of 4em = 1.6em */
     #chatMessages {
-      font-size: 2em;          /* Match LLM Reasoning font size */
+      font-size: 1.6em;        /* 40% of what I made it (was 4em, now 1.6em) */
       line-height: 1.4;
       overflow-y: auto;
       background: #111;
       border: 1px solid #666;
-      padding: 4px;
+      padding: 8px;
       margin-top: 8px;
     }
-    /* Differentiate User and Max colors in Chat */
+    /* Default message styling - all text white */
     #chatMessages div {
-      color: #ffffff; /* Default white for the message content */
+      color: #ffffff; /* White for all message content */
+      margin-bottom: 0.5em;
     }
-    #chatMessages div strong {
-      color: #ffffff; /* White for the sender name if it's the user */
+    /* Max's name only in blue */
+    #chatMessages div[data-sender="Max"] strong {
+      color: #4af; /* Blue for Max's name only */
     }
-    #chatMessages div strong:first-child {
-      color: #90ee90; /* Green for Max sender name */
+    /* User's name only in green */
+    #chatMessages div[data-sender="You"] strong {
+      color: #90ee90; /* Green for User's name only */
     }
-    #chatMessages div strong:first-child + * {
-      color: #90ee90; /* Green for Max message content */
+    /* Instructions area styling - 50% larger */
+    .instructions-area {
+      height: 30%; /* Increased from 20% to 30% */
+      margin-top: 30px; 
+      background: #0a0a0a; 
+      border: 1px solid #4af; 
+      padding: 12px; /* Increased from 8px */
+      border-radius: 4px; 
+      overflow-y: auto;
+      font-size: 1.35em; /* 50% larger (was effectively 1em, now 1.35em) */
+    }
+    .instructions-title {
+      color: #4af; 
+      font-weight: bold; 
+      margin-bottom: 6px; /* Increased from 4px */
+      font-size: 1.1em; /* Slightly larger title */
+    }
+    .instructions-content {
+      line-height: 1.4; /* Increased from 1.3 */
+      color: #ccc;
+    }
+    /* Chat input area styling - larger message box */
+    #chatInput {
+      font-size: 1.5em; /* Larger input text */
+      padding: 8px; /* More padding */
+    }
+    .chat-send-btn {
+      font-size: 1.2em; /* Larger button text */
+      padding: 8px 16px; /* More padding */
+    }
+
+    /* Robot Control Button Styles */
+    .robot-btn {
+      padding: 10px 20px;
+      border: 2px solid;
+      border-radius: 5px;
+      font-size: 1.1em;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      min-width: 150px;
+    }
+
+    .robot-btn-red {
+      background-color: #dc3545;
+      border-color: #dc3545;
+      color: white;
+    }
+
+    .robot-btn-yellow {
+      background-color: #ffc107;
+      border-color: #ffc107;
+      color: #212529;
+    }
+
+    .robot-btn-green {
+      background-color: #28a745;
+      border-color: #28a745;
+      color: white;
+    }
+
+    .robot-btn-gray {
+      background-color: #6c757d;
+      border-color: #6c757d;
+      color: white;
+    }
+
+    .robot-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .movement-btn {
+      padding: 8px 16px;
+      border: 2px solid #4af;
+      border-radius: 5px;
+      background-color: #222;
+      color: #4af;
+      font-size: 1em;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      min-width: 80px;
+    }
+
+    .movement-btn:hover:not(:disabled) {
+      background-color: #4af;
+      color: #222;
+    }
+
+    .movement-btn:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+      border-color: #666;
+      color: #666;
+    }
+
+    .movement-btn-active {
+      background-color: #ffc107 !important;
+      border-color: #ffc107 !important;
+      color: #212529 !important;
     }
   </style>
 </head>
@@ -128,22 +229,67 @@
   </div>
 
   <!-- Row1, Col2: Robot Control -->
-  <div class="panel" style="grid-row:1; grid-column:2; justify-content:center; align-items:center;">
+  <div class="panel" style="grid-row:1; grid-column:2;">
     <div class="panel-title">Robot Control</div>
-    <div style="margin-top:2rem; display:flex; gap:1rem;">
-      <button class="neon-btn px-3 py-1" onclick="sendChatStream('move forward')">Forward</button>
-      <button class="neon-btn px-3 py-1" onclick="sendChatStream('2 to the left')">Left x2</button>
-      <button class="neon-btn px-3 py-1" onclick="sendChatStream('turn right')">Right</button>
+    
+    <!-- Robot Status Section -->
+    <div style="margin-top:2rem; text-align:center;">
+      <button id="robotInitBtn" class="robot-btn robot-btn-red" onclick="initializeRobot()">
+        Initialize Robot
+      </button>
+      <div id="robotStatus" style="margin-top:0.5rem; font-size:1em; color:#ccc;">
+        Robot not initialized
+      </div>
+    </div>
+    
+    <!-- Movement Controls -->
+    <div style="margin-top:2rem;">
+      <div style="text-align:center; margin-bottom:1rem;">
+        <button id="moveUpBtn" class="movement-btn" onclick="moveRobot('up')" disabled>
+          ↑ Up
+        </button>
+      </div>
+      
+      <div style="display:flex; justify-content:center; gap:1rem; margin-bottom:1rem;">
+        <button id="moveLeftBtn" class="movement-btn" onclick="moveRobot('left')" disabled>
+          ← Left
+        </button>
+        <button id="moveRightBtn" class="movement-btn" onclick="moveRobot('right')" disabled>
+          → Right
+        </button>
+      </div>
+      
+      <div style="text-align:center; margin-bottom:1rem;">
+        <button id="moveDownBtn" class="movement-btn" onclick="moveRobot('down')" disabled>
+          ↓ Down
+        </button>
+      </div>
+      
+      <div style="display:flex; justify-content:center; gap:1rem;">
+        <button id="moveForwardBtn" class="movement-btn" onclick="moveRobot('forward')" disabled>
+          ↗ Forward
+        </button>
+        <button id="moveBackBtn" class="movement-btn" onclick="moveRobot('back')" disabled>
+          ↙ Back
+        </button>
+      </div>
+    </div>
+    
+    <!-- Stop Button -->
+    <div style="text-align:center; margin-top:2rem;">
+      <button id="robotStopBtn" class="robot-btn robot-btn-gray" onclick="stopRobot()" disabled>
+        Stop Robot
+      </button>
     </div>
   </div>
 
   <!-- Row2, Col1: Chat -->
   <div class="panel" style="grid-row:2; grid-column:1;">
     <div class="panel-title">Chat</div>
-    <!-- Welcome/Instructions Area (top 20%) -->
-    <div style="height:20%; margin-top:30px; background:#0a0a0a; border:1px solid #4af; padding:8px; border-radius:4px; overflow-y:auto;">
-      <div style="color:#4af; font-weight:bold; margin-bottom:4px;">🤖 AAU Robot Assistant</div>
-      <div style="font-size:0.9em; line-height:1.3; color:#ccc;">
+    <!-- Welcome/Instructions Area (larger) -->
+    <div class="instructions-area">
+      <div class="instructions-title">🤖 AAU Robot Assistant</div>
+      <div class="instructions-content">
         <strong>Welcome!</strong> I can help you with:<br>
         • <strong>Pick objects:</strong> "Pick the red cup on the left"<br>
         • <strong>Place objects:</strong> "Place it in the dishwasher"<br>
@@ -152,11 +298,11 @@
         <em style="color:#4af;">💡 Tip: Be specific about objects and locations!</em>
       </div>
     </div>
-    <!-- Chat Messages Area (remaining 80%) -->
-    <div id="chatMessages" style="flex:1; height:calc(80% - 40px);"></div>
+    <!-- Chat Messages Area (remaining space) -->
+    <div id="chatMessages" style="flex:1; height:calc(70% - 60px);"></div>
     <div style="margin-top:8px; display:flex;">
       <input type="text" id="chatInput" class="bg-gray-800 text-green-300 border border-green-500 px-2 py-1 flex-1" placeholder="Type command...">
-      <button id="chatSendBtn" class="neon-btn px-3 py-1" style="margin-left:8px;">Send</button>
+      <button id="chatSendBtn" class="neon-btn chat-send-btn" style="margin-left:8px;">Send</button>
     </div>
   </div>
 
@@ -182,6 +328,73 @@
   const llmConsole   = document.getElementById("llmConsole");
 
   /****************************************************
+   * ENHANCED ERROR HANDLING UTILITIES
+   ****************************************************/
+  async function getDetailedErrorInfo(response, operation) {
+    const errorInfo = {
+      operation: operation,
+      status: response?.status || 'Unknown',
+      statusText: response?.statusText || 'Unknown',
+      url: response?.url || 'Unknown',
+      type: response?.type || 'Unknown',
+      headers: {},
+      body: null
+    };
+
+    try {
+      // Get headers
+      if (response?.headers) {
+        for (let [key, value] of response.headers.entries()) {
+          errorInfo.headers[key] = value;
+        }
+      }
+      
+      // Try to get response body
+      if (response && !response.bodyUsed) {
+        try {
+          errorInfo.body = await response.text();
+        } catch (e) {
+          errorInfo.body = `Could not read response body: ${e.message}`;
+        }
+      }
+    } catch (e) {
+      errorInfo.extractionError = e.message;
+    }
+
+    return errorInfo;
+  }
+
+  function logDetailedError(error, operation, response = null) {
+    console.error(`❌ DETAILED ERROR for ${operation}:`, {
+      errorMessage: error.message,
+      errorType: error.constructor.name,
+      stack: error.stack,
+      response: response,
+      timestamp: new Date().toISOString(),
+      userAgent: navigator.userAgent,
+      url: window.location.href
+    });
+  }
+
+  function formatErrorForUser(errorInfo) {
+    let message = `[${errorInfo.operation}] `;
+    
+    if (errorInfo.status === 'Unknown') {
+      message += `Connection failed - unable to reach server. `;
+      message += `URL: ${errorInfo.url}`;
+    } else {
+      message += `HTTP ${errorInfo.status} ${errorInfo.statusText}. `;
+      if (errorInfo.body && errorInfo.body.length < 200) {
+        message += `Response: ${errorInfo.body}`;
+      } else if (errorInfo.body) {
+        message += `Response: ${errorInfo.body.substring(0, 200)}...`;
+      }
+    }
+    
+    return message;
+  }
+
+  /****************************************************
    * STATE
    ****************************************************/
   let segFrozen          = false;
@@ -189,11 +402,169 @@
   let realsenseSegTimer  = null;
   let depthTimer         = null;
   let realsenseAvailable = false;
+  let robotStatusTimer   = null;
+
+  /****************************************************
+   * ROBOT CONTROL FUNCTIONS
+   ****************************************************/
+
+  // Start monitoring robot status
+  function startRobotStatusMonitoring() {
+    if (robotStatusTimer) return;
+    
+    robotStatusTimer = setInterval(async () => {
+      try {
+        const resp = await fetch("/robot/status");
+        if (resp.ok) {
+          const status = await resp.json();
+          updateRobotUI(status);
+        }
+      } catch (e) {
+        console.error("Robot status check failed:", e);
+      }
+    }, 1000); // Check every second
+  }
+
+  // Stop monitoring robot status  
+  function stopRobotStatusMonitoring() {
+    if (robotStatusTimer) {
+      clearInterval(robotStatusTimer);
+      robotStatusTimer = null;
+    }
+  }
+
+  // Update robot UI based on status
+  function updateRobotUI(status) {
+    const initBtn = document.getElementById("robotInitBtn");
+    const statusDiv = document.getElementById("robotStatus");
+    const stopBtn = document.getElementById("robotStopBtn");
+    
+    // Update status message
+    statusDiv.textContent = status.message;
+    
+    // Update init button
+    initBtn.className = "robot-btn ";
+    switch (status.state) {
+      case "disconnected":
+        initBtn.className += "robot-btn-red";
+        initBtn.textContent = "Initialize Robot";
+        initBtn.disabled = false;
+        stopBtn.disabled = true;
+        break;
+      case "initializing":
+        initBtn.className += "robot-btn-yellow";
+        initBtn.textContent = "Initializing...";
+        initBtn.disabled = true;
+        stopBtn.disabled = false;
+        break;
+      case "ready":
+        initBtn.className += "robot-btn-green";
+        initBtn.textContent = "Robot Ready";
+        initBtn.disabled = true;
+        stopBtn.disabled = false;
+        break;
+      case "moving":
+        initBtn.className += "robot-btn-green";
+        initBtn.textContent = "Robot Ready";
+        initBtn.disabled = true;
+        stopBtn.disabled = false;
+        break;
+      case "error":
+        initBtn.className += "robot-btn-red";
+        initBtn.textContent = "Error - Retry";
+        initBtn.disabled = false;
+        stopBtn.disabled = false;
+        break;
+    }
+    
+    // Update movement buttons
+    const movementButtons = [
+      "moveUpBtn", "moveDownBtn", "moveLeftBtn", 
+      "moveRightBtn", "moveForwardBtn", "moveBackBtn"
+    ];
+    
+    movementButtons.forEach(btnId => {
+      const btn = document.getElementById(btnId);
+      if (btn) {
+        btn.disabled = !status.buttons_enabled || status.state === "moving";
+        
+        // Remove active state if not moving
+        if (status.state !== "moving") {
+          btn.classList.remove("movement-btn-active");
+        }
+      }
+    });
+  }
+
+  // Initialize robot
+  async function initializeRobot() {
+    try {
+      addChatMessage("Max", "Starting robot initialization...");
+      
+      const resp = await fetch("/robot/initialize", { method: "POST" });
+      if (resp.ok) {
+        console.log("Robot initialization started");
+      } else {
+        const error = await resp.json();
+        addChatMessage("Max", `Robot initialization failed: ${error.error}`);
+      }
+    } catch (e) {
+      console.error("Robot initialization error:", e);
+      addChatMessage("Max", `Robot initialization error: ${e.message}`);
+    }
+  }
+
+  // Move robot in specified direction
+  async function moveRobot(direction) {
+    try {
+      // Set button to active state
+      const btnId = `move${direction.charAt(0).toUpperCase() + direction.slice(1)}Btn`;
+      const btn = document.getElementById(btnId);
+      if (btn) {
+        btn.classList.add("movement-btn-active");
+      }
+      
+      const resp = await fetch(`/robot/move/${direction}`, { method: "POST" });
+      if (resp.ok) {
+        console.log(`Robot moving ${direction}`);
+        addChatMessage("Max", `Moving robot ${direction} (2cm)`);
+      } else {
+        const error = await resp.json();
+        addChatMessage("Max", `Robot movement failed: ${error.error}`);
+        // Remove active state on error
+        if (btn) {
+          btn.classList.remove("movement-btn-active");
+        }
+      }
+    } catch (e) {
+      console.error("Robot movement error:", e);
+      addChatMessage("Max", `Robot movement error: ${e.message}`);
+    }
+  }
+
+  // Stop robot
+  async function stopRobot() {
+    try {
+      const resp = await fetch("/robot/stop", { method: "POST" });
+      if (resp.ok) {
+        addChatMessage("Max", "Robot stopped and disconnected");
+      } else {
+        const error = await resp.json();
+        addChatMessage("Max", `Robot stop failed: ${error.error}`);
+      }
+    } catch (e) {
+      console.error("Robot stop error:", e);
+      addChatMessage("Max", `Robot stop error: ${e.message}`);
+    }
+  }
 
   /****************************************************
    * PAGE LOAD
    ****************************************************/
   window.addEventListener("DOMContentLoaded", async () => {
+    // Start robot monitoring
+    startRobotStatusMonitoring();
+
     // Fetch camera info to check RealSense availability
     try {
       const res = await fetch("/camera_info");
@@ -203,6 +574,7 @@
     } catch (e) {
       realsenseAvailable = false;
       console.error("Error checking camera info:", e);
+      logDetailedError(e, "Camera Info Check");
       addChatMessage("Max", "Error checking RealSense availability. Functionality may be limited.");
     }
 
@@ -232,11 +604,16 @@
   async function fetchRealsenseSeg() {
     try {
       const resp = await fetch("/process_realsense_seg", { method: "POST" });
-      if (!resp.ok) throw new Error("Failed to fetch RealSense frame");
+      if (!resp.ok) {
+        const errorInfo = await getDetailedErrorInfo(resp, "RealSense Segmentation");
+        console.error("RealSense fetch error details:", errorInfo);
+        throw new Error(`Failed to fetch RealSense frame: ${resp.status} ${resp.statusText}`);
+      }
       const d = await resp.json();
       if (d.frame) segImg.src = "data:image/jpeg;base64," + d.frame;
     } catch (e) {
       console.error("RealSense fetch error:", e);
+      logDetailedError(e, "RealSense Segmentation");
     }
   }
 
@@ -260,7 +637,10 @@
   // Unfreeze & resume RealSense feed
   function unfreezeSegWindow() {
       segFrozen = false;
-      fetch("/reset_seg", { method: "POST" }).catch(e => console.error("Reset seg error:", e));
+      fetch("/reset_seg", { method: "POST" }).catch(e => {
+        console.error("Reset seg error:", e);
+        logDetailedError(e, "Reset Segmentation");
+      });
 
       if (realsenseAvailable && !realsenseSegTimer) {
           realsenseSegTimer = setInterval(fetchRealsenseSeg, 250);
@@ -341,9 +721,15 @@ segContainer.addEventListener("click", async ev => {
                 // Update overlay on frozen image
                 segImg.src = "data:image/jpeg;base64," + dd.frame;
                 console.log("Updated image with segmentation results. State after: segFrozen=" + segFrozen + ", isSegmenting=" + isSegmenting);
+            } else {
+                const errorInfo = await getDetailedErrorInfo(resp, "Process Segmentation");
+                console.error("Segmentation processing error:", errorInfo);
+                addChatMessage("Max", `Segmentation error: ${formatErrorForUser(errorInfo)}`);
             }
         } catch (e) {
             console.error("Seg error:", e);
+            logDetailedError(e, "Segmentation Click");
+            addChatMessage("Max", `Segmentation error: ${e.message}`);
         } finally {
             isSegmenting = false;
             console.log("Segmentation complete. Final state: segFrozen=" + segFrozen + ", isSegmenting=" + isSegmenting);
@@ -389,10 +775,18 @@ segContainer.addEventListener("click", async ev => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ camera_mode: mode, local_idx: 0, frame: "" })
       });
+      
+      if (!r.ok) {
+        const errorInfo = await getDetailedErrorInfo(r, "Depth Processing");
+        console.error("Depth processing error:", errorInfo);
+        return;
+      }
+      
       const d = await r.json();
       if (d.frame) depthImg.src = "data:image/jpeg;base64," + d.frame;
     } catch (e) {
       console.error("Depth processing error:", e);
+      logDetailedError(e, "Depth Processing");
     }
   }
 
@@ -416,6 +810,7 @@ segContainer.addEventListener("click", async ev => {
   function addChatMessage(sender, msg) {
     if (chatMessages.children.length > 2000) chatMessages.removeChild(chatMessages.firstChild);
     const dv = document.createElement("div");
+    dv.setAttribute("data-sender", sender); // Add data attribute for styling
     dv.innerHTML = `<strong>${sender}:</strong> ${msg}`;
     chatMessages.appendChild(dv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -444,12 +839,14 @@ segContainer.addEventListener("click", async ev => {
           }
       } catch (error) {
           console.error("❌ Chat error:", error);
+          logDetailedError(error, "Chat Stream");
           addChatMessage("Max", `Error: ${error.message}. Please try again.`);
       }
   }
 
   async function tryStreamingChat(userText) {
       try {
+          console.log("📤 Attempting fetch to /chat-stream");
           const resp = await fetch("/chat-stream", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -458,6 +855,9 @@ segContainer.addEventListener("click", async ev => {
 
           if (!resp.ok) {
               console.log(`❌ Streaming response not ok: ${resp.status}`);
+              const errorInfo = await getDetailedErrorInfo(resp, "Chat Stream");
+              console.error("Streaming error details:", errorInfo);
+              addChatMessage("Max", `Chat streaming failed: ${formatErrorForUser(errorInfo)}`);
               return false;
           }
 
@@ -545,6 +945,8 @@ segContainer.addEventListener("click", async ev => {
           return false;
       } catch (error) {
           console.error("❌ Streaming error:", error);
+          logDetailedError(error, "Chat Stream Request");
+          addChatMessage("Max", `Streaming error: ${error.message}`);
           return false;
       }
   }
@@ -591,31 +993,37 @@ segContainer.addEventListener("click", async ev => {
       return { processed: false, remainingBuffer: buffer };
     }
 
-    // Look for RoboPoint Request and Action Request with flexible matching
+    // Find the required lines - more flexible matching
     let roboPointLine = null;
     let actionLine = null;
 
     for (const line of lines) {
-      if (!roboPointLine && line.toLowerCase().includes("robopoint") && line.toLowerCase().includes("request")) {
-        roboPointLine = line;
-        console.log("✅ Found RoboPoint line (flexible match):", line);
-      } else if (!actionLine && line.toLowerCase().includes("action") && line.toLowerCase().includes("request")) {
-        actionLine = line;
-        console.log("✅ Found Action line (flexible match):", line);
-      }
-    }
-
-    // If not found, check the entire content for keywords (less strict)
-    if (!roboPointLine) {
-      for (const line of lines) {
-        if (line.toLowerCase().includes("robopoint") || line.toLowerCase().includes("object") || line.toLowerCase().includes("find")) {
-          roboPointLine = line;
-          console.log("✅ Found RoboPoint line (keyword match):", line);
-          break;
+        // More flexible regex that handles "[ACTION]RoboPoint Request:" format
+        if (!roboPointLine && /RoboPoint\s*Request\s*:/i.test(line)) {
+            roboPointLine = line;
+            console.log("✅ Found RoboPoint line:", line);
+        } else if (!actionLine && /Action\s*Request\s*:/i.test(line)) {
+            actionLine = line;
+            console.log("✅ Found Action line:", line);
         }
-      }
     }
 
+    // Better handling of combined lines
+    if (!roboPointLine || !actionLine) {
+        // Try to split a single combined line
+        for (const line of lines) {
+            if (line.includes("RoboPoint Request:") && line.includes("Action Request:")) {
+                const parts = line.split(/Action\s*Request\s*:/i);
+                if (parts.length === 2) {
+                    roboPointLine = parts[0].trim();
+                    actionLine = "Action Request:" + parts[1].trim();
+                    console.log("✅ Split combined line:", { roboPointLine, actionLine });
+                    break;
+                }
+            }
+        }
+    }
+    
     if (!actionLine) {
       for (const line of lines) {
         if (line.toLowerCase().includes("action") || line.toLowerCase().includes("pick") || line.toLowerCase().includes("place")) {
@@ -653,6 +1061,7 @@ segContainer.addEventListener("click", async ev => {
   async function tryFallbackChat(userText) {
     try {
       addChatMessage("Max", "Processing your request...");
+      console.log("📤 Attempting fetch to /chat");
       const resp = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -660,7 +1069,9 @@ segContainer.addEventListener("click", async ev => {
       });
 
       if (!resp.ok) {
-        throw new Error(`Server error: ${resp.status}`);
+        const errorInfo = await getDetailedErrorInfo(resp, "Chat Fallback");
+        console.error("Fallback error details:", errorInfo);
+        throw new Error(`Server error: ${formatErrorForUser(errorInfo)}`);
       }
 
       const data = await resp.json();
@@ -681,6 +1092,7 @@ segContainer.addEventListener("click", async ev => {
       }
     } catch (error) {
       console.error("❌ Fallback error:", error);
+      logDetailedError(error, "Chat Fallback");
       addChatMessage("Max", `Fallback error: ${error.message}`);
     }
   }
@@ -822,39 +1234,56 @@ async function executeMultiStepActions(actionBlock) {
         console.log("Keeping segmentation window frozen to show results. Click or send a new message to unfreeze. State: segFrozen=" + segFrozen + ", isSegmenting=" + isSegmenting + ", Timer: " + (realsenseSegTimer ? "Active" : "Cleared"));
     } catch (error) {
         console.error("❌ Action parsing error:", error);
+        logDetailedError(error, "Action Parsing");
         addChatMessage("Max", `Action parsing error: ${error.message}`);
         // Unfreeze in case of error to prevent getting stuck
         unfreezeSegWindow();
     }
 }
   
-  async function executeRoboPointCommand(objectDescription, action, frameB64) {
-    const singleActionBlock = `[ACTION]\nRoboPoint Request: ${objectDescription}\nAction Request: ${action}`;
-    
-    console.log("📤 Sending to RoboPoint:", singleActionBlock);
-    
-    const resp = await fetch("/exec_action", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action_block: singleActionBlock,
-        seg_frame: frameB64
-      })
-    });
+  async function executeRoboPointCommand(objectDescription, action, frameB64, retries = 2) {
+      const singleActionBlock = `[ACTION]\nRoboPoint Request: ${objectDescription}\nAction Request: ${action}`;
+      
+      for (let attempt = 1; attempt <= retries; attempt++) {
+          console.log(`📤 Attempt ${attempt}: Sending to RoboPoint:`, singleActionBlock);
+          
+          try {
+              const resp = await fetch("/exec_action", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                      action_block: singleActionBlock,
+                      seg_frame: frameB64
+                  }),
+                  timeout: 90000 // 90 second timeout
+              });
 
-    if (!resp.ok) {
-      const errorText = await resp.text();
-      throw new Error(`Server error ${resp.status}: ${errorText}`);
-    }
+              if (!resp.ok) {
+                  const errorInfo = await getDetailedErrorInfo(resp, "Execute RoboPoint Command");
+                  console.error(`Attempt ${attempt} failed:`, errorInfo);
+                  if (attempt === retries) {
+                      throw new Error(formatErrorForUser(errorInfo));
+                  }
+                  continue;
+              }
 
-    const result = await resp.json();
-    console.log("📥 RoboPoint result:", result);
-    
-    if (result.error) {
-      throw new Error(result.error);
-    }
-    
-    return result;
+              const result = await resp.json();
+              console.log("📥 RoboPoint result:", result);
+              
+              if (result.error) {
+                  throw new Error(`RoboPoint server error: ${result.error}`);
+              }
+              
+              return result;
+          } catch (error) {
+              console.error(`❌ Attempt ${attempt} error:`, error);
+              if (attempt === retries) {
+                  throw error;
+              }
+              // Wait before retry
+              await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+      }
   }
 
   /****************************************************
@@ -863,3 +1292,6 @@ async function executeMultiStepActions(actionBlock) {
   chatSendBtn.addEventListener("click", () => sendChatStream());
   chatInput.addEventListener("keyup", e => { if (e.key === "Enter") sendChatStream(); });
 </script>
+
+</body>
+</html>

@@ -22,13 +22,13 @@ from typing import Optional
 from selenium import webdriver
 
 # Local imports
-from utils.config import Config
-from utils.logger import setup_logging
-from utils.network_manager import NetworkManager
-from utils.chrome_manager import ChromeDriverManager
-from utils.robot_interface import FrankaRobotInterface
-from utils.robot_commands import FrankaRobotCommands
-from utils.signal_handler import GracefulKiller
+from rutils.config import Config
+from rutils.logger import setup_logging
+from rutils.network_manager import NetworkManager
+from rutils.chrome_manager import ChromeDriverManager
+from rutils.robot_interface import FrankaRobotInterface
+from rutils.robot_commands import FrankaRobotCommands
+from rutils.signal_handler import GracefulKiller
 
 
 def run_interactive_shell(automation: 'FrankaAutomation'):

@@ -20,6 +20,15 @@ from utils.robopoints_handler import RoboPointsHandler
 import os
 from dotenv import load_dotenv
 
+# Add these imports after your existing imports
+import threading
+from rutils.config import Config
+from rutils.chrome_manager import ChromeDriverManager
+from rutils.robot_interface import FrankaRobotInterface
+from rutils.robot_commands import FrankaRobotCommands
+from rutils.network_manager import NetworkManager
+from selenium import webdriver
+
 
 app = Flask(__name__)
 CORS(app)
@@ -43,6 +52,15 @@ print(f"  LLM Full: {LLM_FULL}")
 
 # top-of-file imports
 from utils.llm_handler import LLMHandler
+
+# Add these after your existing global variables (around line 55)
+robot_automation = None
+robot_status = {
+    "state": "disconnected",  # disconnected, initializing, ready, moving, error
+    "message": "Robot not initialized",
+    "buttons_enabled": False
+}
+robot_lock = threading.Lock()
 
 llm = LLMHandler(stream_url=LLM_STREAM, full_url=LLM_FULL)
 
@@ -72,6 +90,165 @@ seg_lock = threading.Lock()
 depth_lock = threading.Lock()
 
 POINT_RE = re.compile(r"\(([0-9.+-eE]+)\s*,\s*([0-9.+-eE]+)\)")
+
+# ========== ROBOT CONTROL FUNCTIONS ==========
+
+def initialize_robot_system():
+    """Initialize the robot system in a separate thread."""
+    global robot_automation, robot_status
+    
+    try:
+        with robot_lock:
+            robot_status["state"] = "initializing"
+            robot_status["message"] = "Setting up network configuration..."
+        
+        # Create robot configuration
+        config = Config(
+            robot_ip="172.16.0.2",
+            local_ip="172.16.0.1", 
+            network_interface="enp2s0"
+        )
+        
+        # Initialize logger and managers
+        from rutils.logger import setup_logging
+        logger = setup_logging()
+        
+        from rutils.network_manager import NetworkManager
+        from rutils.chrome_manager import ChromeDriverManager
+        
+        network_manager = NetworkManager(config, logger)
+        chrome_manager = ChromeDriverManager(config, logger)
+        
+        with robot_lock:
+            robot_status["message"] = "Configuring network interface..."
+        
+        # Setup network
+        if not network_manager.configure_network():
+            raise Exception("Network configuration failed")
+        
+        with robot_lock:
+            robot_status["message"] = "Testing robot connectivity..."
+            
+        # Test connectivity
+        if not network_manager.test_robot_connectivity():
+            print("[WARNING] Robot connectivity test failed, but continuing...")
+        
+        with robot_lock:
+            robot_status["message"] = "Starting browser and connecting to robot..."
+        
+        # Create browser driver
+        driver = chrome_manager.create_driver(headless=True)
+        
+        # Create robot interface
+        robot_interface = FrankaRobotInterface(driver, config, logger)
+        robot_commands = FrankaRobotCommands(robot_interface, logger)
+        
+        with robot_lock:
+            robot_status["message"] = "Logging into robot interface..."
+        
+        # Initialize robot
+        robot_interface.navigate_and_login()
+        robot_interface.ensure_joints_unlocked()
+        
+        # Store the automation instance
+        class SimpleRobotAutomation:
+            def __init__(self, driver, robot, commands, chrome_manager):
+                self.driver = driver
+                self.robot = robot
+                self.commands = commands
+                self.chrome_manager = chrome_manager
+                self._is_initialized = True
+            
+            def is_robot_ready(self):
+                if not self._is_initialized or not self.driver or not self.robot:
+                    return False
+                try:
+                    _ = self.driver.current_url
+                    return True
+                except:
+                    self._is_initialized = False
+                    return False
+            
+            def stop_robot(self):
+                try:
+                    if self.robot and self.driver:
+                        self.robot.release_control()
+                    if self.driver:
+                        self.driver.quit()
+                    self.chrome_manager.cleanup_all_chrome_processes()
+                except Exception as e:
+                    print(f"Error stopping robot: {e}")
+                self._is_initialized = False
+        
+        robot_automation = SimpleRobotAutomation(driver, robot_interface, robot_commands, chrome_manager)
+        
+        with robot_lock:
+            robot_status["state"] = "ready"
+            robot_status["message"] = "Robot ready for commands"
+            robot_status["buttons_enabled"] = True
+            
+        print("[INFO] Robot initialization completed successfully")
+        
+    except Exception as e:
+        with robot_lock:
+            robot_status["state"] = "error"
+            robot_status["message"] = f"Initialization error: {str(e)}"
+            robot_status["buttons_enabled"] = False
+        print(f"Robot initialization error: {e}")
+        import traceback
+        traceback.print_exc()
+
+def execute_robot_movement(direction):
+    """Execute robot movement in specified direction."""
+    global robot_automation, robot_status
+    
+    if not robot_automation or not robot_automation.is_robot_ready():
+        return False, "Robot not ready"
+    
+    # Corrected movement mappings (2cm = 20mm)
+    movements = {
+        "up": {"z": -20},      # Up = negative Z (works fine)
+        "down": {"z": 20},     # Down = positive Z (works fine)
+        "left": {"x": -20},    # Left = negative X (was positive Y)
+        "right": {"x": 20},    # Right = positive X (was negative Y)
+        "forward": {"y": -20},  # Forward = positive Y (was positive X)
+        "back": {"y": 20}     # Back = negative Y (was negative X)
+    }
+    
+    if direction not in movements:
+        return False, "Invalid direction"
+    
+    try:
+        with robot_lock:
+            robot_status["state"] = "moving"
+            robot_status["message"] = f"Moving {direction}..."
+        
+        # Execute movement
+        move_params = {"x": 0, "y": 0, "z": 0, "speed": 10, "acceleration": 10}
+        move_params.update(movements[direction])
+        
+        success = robot_automation.commands.move_robot(**move_params)
+        
+        with robot_lock:
+            if success:
+                robot_status["state"] = "ready"
+                robot_status["message"] = "Robot ready for commands"
+            else:
+                robot_status["state"] = "error"
+                robot_status["message"] = "Movement failed"
+                
+        return success, robot_status["message"]
+        
+    except Exception as e:
+        with robot_lock:
+            robot_status["state"] = "error"
+            robot_status["message"] = f"Movement error: {str(e)}"
+        print(f"Robot movement error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, str(e)
+
+####Robot Controll end####
 
 def _points_from_string(raw: str):
     """
@@ -427,6 +604,71 @@ def broadcast_to_llm_console(token):
     print(f"[LLM Reasoning] {token}")
 
 
+# ========== ROBOT CONTROL ROUTES ==========
+
+@app.route("/robot/initialize", methods=["POST"])
+def robot_initialize():
+    """Initialize the robot system."""
+    global robot_status
+    
+    with robot_lock:
+        if robot_status["state"] in ["initializing", "moving"]:
+            return jsonify({"error": "Robot is busy"}), 400
+        
+        if robot_status["state"] == "ready":
+            return jsonify({"error": "Robot already initialized"}), 400
+    
+    # Start initialization in background thread
+    init_thread = threading.Thread(target=initialize_robot_system)
+    init_thread.daemon = True
+    init_thread.start()
+    
+    return jsonify({"status": "Initialization started"})
+
+@app.route("/robot/status", methods=["GET"])
+def robot_status_endpoint():
+    """Get current robot status."""
+    with robot_lock:
+        return jsonify(robot_status.copy())
+
+@app.route("/robot/move/<direction>", methods=["POST"])
+def robot_move(direction):
+    """Move robot in specified direction."""
+    global robot_status
+    
+    with robot_lock:
+        if robot_status["state"] != "ready":
+            return jsonify({"error": "Robot not ready"}), 400
+    
+    # Execute movement in background thread
+    def move_thread():
+        execute_robot_movement(direction)
+    
+    thread = threading.Thread(target=move_thread)
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({"status": f"Moving {direction}"})
+
+@app.route("/robot/stop", methods=["POST"])
+def robot_stop():
+    """Stop/reset robot system."""
+    global robot_automation, robot_status
+    
+    try:
+        if robot_automation:
+            robot_automation.stop_robot()
+            robot_automation = None
+        
+        with robot_lock:
+            robot_status["state"] = "disconnected"
+            robot_status["message"] = "Robot disconnected"
+            robot_status["buttons_enabled"] = False
+            
+        return jsonify({"status": "Robot stopped"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # ---------------------------------------------------------------------------
 #  STREAMING CHAT ENDPOINT  (drop-in replacement)
 # ---------------------------------------------------------------------------
@@ -461,9 +703,7 @@ def reset_frame_and_fetch_fresh():
     else:
         print("[INFO] RealSense not active, no fresh frame fetched after reset.")
 
-# ---------------------------------------------------------------------------
-#  STREAMING CHAT ENDPOINT (drop-in replacement)
-# ---------------------------------------------------------------------------
+
 # ---------------------------------------------------------------------------
 #  STREAMING CHAT ENDPOINT (drop-in replacement)
 # ---------------------------------------------------------------------------
