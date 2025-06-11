@@ -713,14 +713,16 @@ segContainer.addEventListener("click", async ev => {
                 if (dd.object_info) {
                     addChatMessage(
                         "Max",
-                        `Center: ${dd.object_info.center_xyz_m.map(v => v.toFixed(3)).join(', ')} m; ` +
+                        `Center: ${dd.object_info.center_xyz_mm.map(v => Math.round(v)).join(', ')} mm; ` +
                         `distance ${dd.object_info.distance_m.toFixed(3)} m; ` +
-                        `W×H ${(dd.object_info.width_m * 100).toFixed(1)}×${(dd.object_info.height_m * 100).toFixed(1)} cm`
+                        `Size ${Math.round(dd.object_info.length_mm)}×${Math.round(dd.object_info.width_mm)} mm; ` +
+                        `Orientation ${Math.round(dd.object_info.orientation_deg)}°`
                     );
                 }
-                // Update overlay on frozen image
+                // Update overlay on frozen image - this now includes the verified circle
                 segImg.src = "data:image/jpeg;base64," + dd.frame;
-                console.log("Updated image with segmentation results. State after: segFrozen=" + segFrozen + ", isSegmenting=" + isSegmenting);
+                console.log("Updated image with segmentation results and verified center point.");
+            
             } else {
                 const errorInfo = await getDetailedErrorInfo(resp, "Process Segmentation");
                 console.error("Segmentation processing error:", errorInfo);
@@ -820,6 +822,10 @@ segContainer.addEventListener("click", async ev => {
       const userText = (customText || chatInput.value).trim();
       if (!userText) return;
 
+      // Store current user message for results
+      window.current_user_message = userText;
+      // Don't set a fake path here - let the server provide the real one
+
       chatInput.value = "";
       addChatMessage("You", userText);
 
@@ -881,7 +887,6 @@ segContainer.addEventListener("click", async ev => {
                       let content = line.slice(6).trim();
 
                       if (content === "[DONE]") break;
-
                       // Handle thinking and response content
                       if (content.startsWith("thinking:")) {
                           const thinkingToken = content.slice(9);
@@ -895,20 +900,22 @@ segContainer.addEventListener("click", async ev => {
                           llmConsole.scrollTop = llmConsole.scrollHeight;
                       } else if (content.startsWith("response:")) {
                           const responseToken = content.slice(9);
-                          // Add space if needed before appending token
+                          // PRESERVE newlines in action buffer
                           if (answer && responseToken && needsSpace(answer, responseToken)) {
                               answer += " " + responseToken;
                           } else {
                               answer += responseToken;
                           }
+                          // For action buffer, preserve the raw token to maintain formatting
                           actionBuffer += responseToken;
                       } else {
-                          // Add space if needed before appending token
+                          // PRESERVE newlines in action buffer
                           if (answer && content && needsSpace(answer, content)) {
                               answer += " " + content;
                           } else {
                               answer += content;
                           }
+                          // For action buffer, preserve the raw token to maintain formatting
                           actionBuffer += content;
                       }
 
@@ -1097,8 +1104,16 @@ segContainer.addEventListener("click", async ev => {
     }
   }
 
-async function executeMultiStepActions(actionBlock) {
-    console.log("🔍 DEBUG: Raw action block:", actionBlock);
+  async function executeMultiStepActions(actionBlock) {
+      console.log("🔍 DEBUG: Raw action block:", actionBlock);
+
+      // Clear previous results
+      window.robopoint_results = [];
+      window.current_results = {
+          user_message: window.current_user_message || "Unknown command",
+          imagePath: "Unknown path",  // Will be updated with actual path
+          objects: []
+      };
 
     try {
         // Extract [ACTION] block content
@@ -1121,16 +1136,15 @@ async function executeMultiStepActions(actionBlock) {
         }
         console.log("🔍 DEBUG: All lines:", lines);
 
-        // Find the required lines
         let roboPointLine = null;
-        let actionLine = null;
+        let actionLines = [];  // ✅ Changed to array to collect multiple action lines
 
         for (const line of lines) {
             if (line.match(/^\s*RoboPoint\s+Request\s*:/i)) {
                 roboPointLine = line;
                 console.log("✅ Found RoboPoint line:", line);
             } else if (line.match(/^\s*Action\s+Request\s*:/i)) {
-                actionLine = line;
+                actionLines.push(line);  // ✅ Collect all action lines
                 console.log("✅ Found Action line:", line);
             }
         }
@@ -1142,7 +1156,7 @@ async function executeMultiStepActions(actionBlock) {
             return;
         }
 
-        if (!actionLine) {
+        if (actionLines.length === 0) {  // ✅ Check if we have any action lines
             console.log("❌ Available lines:", lines);
             addChatMessage("Max", `Error: Missing 'Action Request:' line.`);
             return;
@@ -1150,16 +1164,26 @@ async function executeMultiStepActions(actionBlock) {
 
         // Extract content after colons
         const roboPointContent = roboPointLine.split(':', 2)[1];
-        const actionContent = actionLine.split(':', 2)[1];
 
-        if (!roboPointContent || !actionContent) {
+        // ✅ Combine all action lines and parse them
+        let allActionContent = "";
+        if (actionLines.length === 1) {
+            // Single line: might be "Pick; Place" or just "Pick"
+            allActionContent = actionLines[0].split(':', 2)[1];
+        } else {
+            // Multiple lines: combine them with semicolons
+            const actionParts = actionLines.map(line => line.split(':', 2)[1].trim());
+            allActionContent = actionParts.join('; ');
+        }
+
+        if (!roboPointContent || !allActionContent) {
             addChatMessage("Max", "Error: Could not extract content from request/action lines");
             return;
         }
 
         // Parse the semicolon-separated values
         const objects = roboPointContent.split(';').map(s => s.trim()).filter(s => s);
-        const actions = actionContent.split(';').map(s => s.trim()).filter(s => s);
+        const actions = allActionContent.split(';').map(s => s.trim()).filter(s => s);
 
         console.log("🔍 DEBUG: Parsed objects:", objects);
         console.log("🔍 DEBUG: Parsed actions:", actions);
@@ -1194,7 +1218,7 @@ async function executeMultiStepActions(actionBlock) {
         }
 
         // Execute each command
-        for (let i = 0; i < objects.length; i++) {
+for (let i = 0; i < objects.length; i++) {
             const object = objects[i];
             const action = actions[i];
 
@@ -1203,18 +1227,52 @@ async function executeMultiStepActions(actionBlock) {
             try {
                 const result = await executeRoboPointCommand(object, action, frameB64);
 
+                // Update image path with the actual saved path from the first result
+                if (i === 0 && result.image_path) {
+                    window.current_results.imagePath = result.image_path;
+                    console.log(`📁 Updated image path: ${result.image_path}`);
+                }
+
                 if (result.seg_frame) {
                     segImg.src = "data:image/jpeg;base64," + result.seg_frame;
                     console.log("Updated image with RoboPoint results. State after: segFrozen=" + segFrozen + ", isSegmenting=" + isSegmenting);
                 }
 
-                // Show location for both pick and place
-                if (result.object_info && result.object_info.center_xyz_m) {
+                // Collect result in the desired format
+                if (result.object_info && result.object_info.center_xyz_mm) {
                     const info = result.object_info;
+                    const objectResult = {
+                        action: action.toLowerCase(),
+                        location: result.placement || "unknown",
+                        object: object,
+                        object_center_location: {
+                            x: Math.round(info.center_xyz_mm[0]),
+                            y: Math.round(info.center_xyz_mm[1]),
+                            z: Math.round(info.center_xyz_mm[2])
+                        },
+                        object_size: {
+                            width: Math.round(info.width_mm),
+                            length: Math.round(info.length_mm)
+                        },
+                        object_orientation: Math.round(info.orientation_deg)
+                    };
+                    
+                    window.current_results.objects.push(objectResult);
+                    
                     addChatMessage("Max", 
-                        `✅ Step ${i+1}: Successfully found "${object}"! Location: ${info.center_xyz_m.map(v=>v.toFixed(3)).join(', ')} m, Distance: ${info.distance_m.toFixed(3)} m, Size: ${(info.width_m*100).toFixed(1)}×${(info.height_m*100).toFixed(1)} cm`
+                        `✅ Step ${i+1}: Successfully found "${object}"! Location: ${info.center_xyz_mm.map(v=>Math.round(v)).join(', ')} mm, Distance: ${info.distance_m.toFixed(3)} m, Size: ${Math.round(info.length_mm)}×${Math.round(info.width_mm)} mm, Orientation: ${Math.round(info.orientation_deg)}°`
                     );
                 } else {
+                    // Add result even without detailed info
+                    const objectResult = {
+                        action: action.toLowerCase(),
+                        location: result.placement || "unknown",
+                        object: object,
+                        object_center_location: { x: 0, y: 0, z: 0 },
+                        object_size: { width: 0, length: 0 },
+                        object_orientation: 0
+                    };
+                    window.current_results.objects.push(objectResult);
                     addChatMessage("Max", `✅ Step ${i+1}: Successfully found "${object}"`);
                 }
 
@@ -1229,18 +1287,24 @@ async function executeMultiStepActions(actionBlock) {
             }
         }
 
+        // Print final results to console
+        console.log("🤖 ROBOPOINT RESULTS:");
+        console.log("=".repeat(50));
+        console.log(JSON.stringify(window.current_results, null, 2));
+        console.log("=".repeat(50));
+
         addChatMessage("Max", `🎉 Completed ${objects.length} action(s)!`);
-        // Do NOT unfreeze here; keep the mask and results visible until user interaction
+        
+        // Keep the segmentation window frozen to show results
         console.log("Keeping segmentation window frozen to show results. Click or send a new message to unfreeze. State: segFrozen=" + segFrozen + ", isSegmenting=" + isSegmenting + ", Timer: " + (realsenseSegTimer ? "Active" : "Cleared"));
     } catch (error) {
         console.error("❌ Action parsing error:", error);
         logDetailedError(error, "Action Parsing");
         addChatMessage("Max", `Action parsing error: ${error.message}`);
-        // Unfreeze in case of error to prevent getting stuck
         unfreezeSegWindow();
     }
 }
-  
+
   async function executeRoboPointCommand(objectDescription, action, frameB64, retries = 2) {
       const singleActionBlock = `[ACTION]\nRoboPoint Request: ${objectDescription}\nAction Request: ${action}`;
       

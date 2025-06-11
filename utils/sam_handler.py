@@ -34,9 +34,7 @@ class SamHandler:
         ####################################################################
     def run_sam_overlay(self, pil_img, coords, active_idx: int = 0, max_dim: int = 640):
         """
-        Run SAM on the given point, colour the mask green, dim the rest,
-        and remember the Boolean mask for depth processing.
-        Ensure the mask consists of the largest connected component only.
+        Run SAM and return both the overlay image and the boolean mask at original resolution.
         """
         import time, cv2, numpy as np
         t0 = time.time()
@@ -72,29 +70,25 @@ class SamHandler:
         if masks is None or len(masks) == 0:
             return pil_img
 
-        # ---------- resize mask to full resolution ----
+        # ---------- resize mask to ORIGINAL resolution ----
         mask_small     = masks[0].astype(np.uint8)
         mask_bool_full = cv2.resize(
             mask_small, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST
         ).astype(bool)
 
-        # ---------- connected component analysis to select largest component ----
+        # ---------- connected component analysis ----
         mask_uint8 = mask_bool_full.astype(np.uint8) * 255
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask_uint8, connectivity=8)
         
-        if num_labels > 1:  # If there are multiple components (excluding background)
-            # Find the label of the largest component (excluding background label 0)
-            areas = stats[1:, cv2.CC_STAT_AREA]  # Skip background (label 0)
-            largest_label = np.argmax(areas) + 1  # Add 1 to account for skipped background
-            print(f"[SAM] Found {num_labels-1} components, selecting largest with area {areas[largest_label-1]}")
-            
-            # Create a new mask with only the largest component
+        if num_labels > 1:
+            areas = stats[1:, cv2.CC_STAT_AREA]
+            largest_label = np.argmax(areas) + 1
             mask_bool_full = (labels == largest_label)
-        else:
-            print("[SAM] Only one component found in mask")
+            print(f"[SAM] Selected largest component with area {areas[largest_label-1]} pixels")
 
-        # ---------- remember mask for depth logic -----
+        # ---------- STORE mask at ORIGINAL resolution -----
         self.last_mask_bool = mask_bool_full
+        print(f"[SAM] Stored mask with shape {mask_bool_full.shape}, has {np.sum(mask_bool_full)} pixels")
 
         # ---------- green overlay ---------------------
         cv_img                  = np_img.copy()
@@ -103,12 +97,20 @@ class SamHandler:
         ).astype(np.uint8)
         cv_img[~mask_bool_full] = (0.8 * cv_img[~mask_bool_full]).astype(np.uint8)
 
+        # Store the mask for other functions to use
+        self.last_mask_bool = mask_bool_full
+        self.last_overlay_image = Image.fromarray(cv_img)  # Store the overlay image too
+        
         print(f"[SAM] Inference+overlay {time.time()-t0:.3f}s")
         return Image.fromarray(cv_img)
-        
+            
     def get_last_mask(self):
-        """Return the most recent Boolean mask produced by run_sam_overlay()."""
+        """Return the most recent Boolean mask."""
         return getattr(self, "last_mask_bool", None)
+
+    def get_last_overlay_image(self):
+        """Return the most recent overlay image."""
+        return getattr(self, "last_overlay_image", None)
 
     def toggle_segmentation(self, pil_img, click_coords=None, max_dim=640):
         """

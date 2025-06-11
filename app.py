@@ -53,7 +53,10 @@ print(f"  LLM Full: {LLM_FULL}")
 # top-of-file imports
 from utils.llm_handler import LLMHandler
 
-# Add these after your existing global variables (around line 55)
+robopoint_results = []
+current_user_message = ""
+current_image_path = ""
+
 robot_automation = None
 robot_status = {
     "state": "disconnected",  # disconnected, initializing, ready, moving, error
@@ -322,6 +325,7 @@ def reset_frame_and_fetch_fresh():
 # ────────────────────────────────────────────────────────────────────
 #  /exec_action  – returns placement + full geometry string
 # ────────────────────────────────────────────────────────────────────
+
 @app.route("/exec_action", methods=["POST"])
 def exec_action():
     """
@@ -342,6 +346,7 @@ def exec_action():
     except Exception as e:
         return jsonify({"error": f"Invalid seg_frame: {e}"}), 400
     pil_img = Image.open(io.BytesIO(g_last_raw_frame)).convert("RGB")
+    
     # --- SAVE THE IMAGE ---
     img_idx = get_next_image_index()
     img_path = os.path.join(ROBOPOINT_IMAGE_DIR, f"{img_idx}.jpg")
@@ -393,32 +398,44 @@ def exec_action():
     object_info = None
     geometry_msg = "(No geometry available)"
     
-    if depth_handler.start_realsense():  # Remove dev_info parameter
+    if depth_handler.start_realsense():
         _, depth_arr = depth_handler.get_realsense_frames()
         mask_bool    = sam_handler.get_last_mask()
         object_info  = depth_handler.calculate_object_info(mask_bool, depth_arr)
         
         if object_info:
-            cx, cy, cz = object_info["center_xyz_m"]
+            cx, cy, cz = object_info["center_xyz_mm"]
             if "pick" in action_type:
                 # Full geometry for pick operations
                 geometry_msg = (
-                    f"Center: {cx:.3f}, {cy:.3f}, {cz:.3f} m; "
+                    f"Center: {cx:.0f}, {cy:.0f}, {cz:.0f} mm; "
                     f"distance {object_info['distance_m']:.3f} m; "
-                    f"W×H {object_info['width_m']*100:.1f}×"
-                    f"{object_info['height_m']*100:.1f} cm"
+                    f"Size {object_info['length_mm']:.0f}×{object_info['width_mm']:.0f} mm; "
+                    f"Orientation {object_info['orientation_deg']:.0f}°"
                 )
             else:
-                # Just center point and height for place operations
-                geometry_msg = f"Center: {cx:.3f}, {cy:.3f}, {cz:.3f} m"
+                # Just center point for place operations
+                geometry_msg = f"Center: {cx:.0f}, {cy:.0f}, {cz:.0f} mm"
 
     # Draw circle at centerpoint if object_info is available
-    if object_info and "bbox_px" in object_info:
+    if object_info and "center_px" in object_info:
+        center_x, center_y = object_info["center_px"]
+        # Get the mask that was used for center calculation
+        mask_bool = sam_handler.get_last_mask()
+        # Use the same mask for drawing verification
+        seg_img = draw_centerpoint_circle(seg_img, center_x, center_y, mask_bool)
+        print(f"[DEBUG] Drew circle using mask-verified coordinates ({center_x}, {center_y})")
+    elif object_info and "bbox_px" in object_info:
+        # Fallback to bounding box center
         x_min, y_min, x_max, y_max = object_info["bbox_px"]
         center_x = (x_min + x_max) / 2
         center_y = (y_min + y_max) / 2
-        seg_img = draw_centerpoint_circle(seg_img, center_x, center_y)
-    seg_b64 = pil_to_b64(seg_img)
+        mask_bool = sam_handler.get_last_mask()
+        seg_img = draw_centerpoint_circle(seg_img, center_x, center_y, mask_bool)
+        print(f"[DEBUG] Drew circle using bbox center ({center_x}, {center_y})")
+    
+    # Convert final image to base64
+    out_b64 = pil_to_b64(seg_img)
 
     # 6) Human-readable found message
     found_msg = f"{instruction} located at {placement} ({x0:.2f}, {y0:.2f})"
@@ -428,13 +445,14 @@ def exec_action():
 
     # 8) Respond
     return jsonify({
-        "seg_frame"   : seg_b64,
+        "seg_frame"   : out_b64,  # Fixed: was seg_b64, now out_b64
         "found_msg"   : found_msg,
         "geometry_msg": geometry_msg,
         "placement"   : placement,
         "object_info" : object_info,
         "rp_result"   : rp_result,
-        "action_type" : action_type
+        "action_type" : action_type,
+        "image_path"  : img_path  # Add the actual saved image path
     })
 
 ###########################
@@ -563,19 +581,92 @@ def draw_points_on_image(pil_img, points_str, active_idx=0, only_active=False):
 
     return Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
 
-def draw_centerpoint_circle(pil_img, center_x, center_y):
+def draw_centerpoint_circle(pil_img, center_x, center_y, mask_bool=None):
     """
-    Draws a single blue circle on pil_img at the specified pixel coordinates (center_x, center_y).
+    Draws a circle and VERIFIES it's on the actual mask using the same logic as center calculation.
     """
-    print(f"[DEBUG] Drawing circle at centerpoint ({center_x}, {center_y})")
+    print(f"[DEBUG] Drawing circle at pixel coordinates ({center_x}, {center_y})")
+    
+    # Convert PIL to OpenCV format
     cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
     h, w, _ = cv_img.shape
     
     px = int(center_x)
     py = int(center_y)
-    color = (255, 0, 0)  # Blue in BGR
-    radius = 10  # Radius to match the original cross size (20 pixels span)
-    cv2.circle(cv_img, (px, py), radius, color, 2)  # Draw circle with thickness 2
+    
+    # If we have the mask, let's verify the center point
+    if mask_bool is not None:
+        print(f"[DEBUG] Mask shape: {mask_bool.shape}, Image shape: {h}x{w}")
+        
+        # Resize mask to match image if needed
+        if mask_bool.shape != (h, w):
+            mask_resized = cv2.resize(
+                mask_bool.astype(np.uint8), (w, h), 
+                interpolation=cv2.INTER_NEAREST
+            ).astype(bool)
+            print(f"[DEBUG] Resized mask from {mask_bool.shape} to {mask_resized.shape}")
+        else:
+            mask_resized = mask_bool
+            
+        # RECALCULATE center using the SAME logic as in calculate_object_info
+        mask_y_coords, mask_x_coords = np.where(mask_resized)
+        
+        if len(mask_y_coords) > 0:
+            # True center of mass calculation
+            cx_true = float(np.mean(mask_x_coords))
+            cy_true = float(np.mean(mask_y_coords))
+            px_corrected = int(round(cx_true))
+            py_corrected = int(round(cy_true))
+            
+            print(f"[DEBUG] Recalculated center: ({cx_true:.2f}, {cy_true:.2f}) -> ({px_corrected}, {py_corrected})")
+            
+            # Use the recalculated center instead of the passed coordinates
+            px, py = px_corrected, py_corrected
+            
+            # Verify this point is actually in the mask
+            if mask_resized[py, px]:
+                print(f"[DEBUG] ✅ Corrected center ({px}, {py}) is confirmed on the mask!")
+            else:
+                print(f"[DEBUG] ❌ Even corrected center ({px}, {py}) is not on mask!")
+                # Find closest mask pixel
+                distances = ((mask_y_coords - py)**2 + (mask_x_coords - px)**2)
+                closest_idx = np.argmin(distances)
+                px = int(mask_x_coords[closest_idx])
+                py = int(mask_y_coords[closest_idx])
+                print(f"[DEBUG] Using closest mask pixel: ({px}, {py})")
+        else:
+            print(f"[DEBUG] ❌ No mask pixels found!")
+    
+    # Ensure coordinates are within image bounds
+    if 0 <= px < w and 0 <= py < h:
+        # Draw a larger, more visible circle
+        color = (255, 0, 0)  # Blue in BGR
+        radius = 15  # Larger radius
+        thickness = 3  # Thicker line
+        
+        # Draw the circle
+        cv2.circle(cv_img, (px, py), radius, color, thickness)
+        
+        # Also draw a small cross at the exact center
+        cross_size = 8
+        cv2.line(cv_img, (px-cross_size, py), (px+cross_size, py), color, 2)
+        cv2.line(cv_img, (px, py-cross_size), (px, py+cross_size), color, 2)
+        
+        print(f"[DEBUG] ✅ Drew circle and cross at ({px}, {py}) within image bounds {w}x{h}")
+        
+        # VERIFICATION: Check if the pixel at this location is green-ish (part of mask overlay)
+        pixel_bgr = cv_img[py, px]
+        pixel_rgb = pixel_bgr[::-1]  # Convert BGR to RGB
+        print(f"[DEBUG] Pixel color at center: RGB{tuple(pixel_rgb)}")
+        
+        # Check if it's greenish (from the mask overlay)
+        if pixel_rgb[1] > pixel_rgb[0] and pixel_rgb[1] > pixel_rgb[2]:  # Green channel dominant
+            print(f"[DEBUG] ✅ Pixel appears to be on the green mask!")
+        else:
+            print(f"[DEBUG] ⚠️ Pixel doesn't appear to be on the green mask")
+            
+    else:
+        print(f"[DEBUG] ❌ Circle coordinates ({px}, {py}) are outside image bounds {w}x{h}")
     
     return Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
 
@@ -921,12 +1012,20 @@ def process_seg_endpoint():
 
         # 1-c  Draw circle at centerpoint if object_info is available
         output_img = sam_img
-        if object_info and "bbox_px" in object_info:
-            # Compute centerpoint from bounding box or directly from object_info if available
+        if object_info and "center_px" in object_info:
+            # Use the TRUE center of mass from the mask calculation
+            center_x, center_y = object_info["center_px"]
+            mask_bool = sam_handler.get_last_mask()
+            output_img = draw_centerpoint_circle(sam_img, center_x, center_y, mask_bool)
+            print(f"[DEBUG] Manual click: Drew circle using mask-verified coordinates ({center_x}, {center_y})")
+        elif object_info and "bbox_px" in object_info:
+            # Fallback to bounding box center only if center_px is not available
             x_min, y_min, x_max, y_max = object_info["bbox_px"]
             center_x = (x_min + x_max) / 2
             center_y = (y_min + y_max) / 2
-            output_img = draw_centerpoint_circle(sam_img, center_x, center_y)
+            mask_bool = sam_handler.get_last_mask()
+            output_img = draw_centerpoint_circle(sam_img, center_x, center_y, mask_bool)
+            print(f"[DEBUG] Manual click: Drew circle using bbox center fallback ({center_x}, {center_y})")
         elif g_state["points_str"]:
             output_img = draw_points_on_image(
                 sam_img, g_state["points_str"], g_state["active_cross_idx"]

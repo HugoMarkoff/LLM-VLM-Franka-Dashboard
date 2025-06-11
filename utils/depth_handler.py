@@ -197,96 +197,104 @@ class DepthHandler:
         else:
             mask_depth = mask_bool
 
-        # 2) Compute centroid in mask space
-        ys, xs = np.where(mask_depth)
-        if ys.size == 0:
+        # 2) Find ALL pixels that belong to the mask
+        mask_y_coords, mask_x_coords = np.where(mask_depth)
+        
+        if len(mask_y_coords) == 0:
             print("[DepthHandler] No mask pixels found.")
             return None
-        cy_init, cx_init = int(ys.mean() + 0.5), int(xs.mean() + 0.5)
 
-        # 2.5) Adjust centroid to ensure it's inside the mask (for non-convex shapes)
-        if not mask_depth[cy_init, cx_init]:
-            distances = np.full((h_d, w_d), np.inf)
-            for y in range(h_d):
-                for x in range(w_d):
-                    if mask_depth[y, x]:
-                        distances[y, x] = np.sqrt((y - cy_init)**2 + (x - cx_init)**2)
-            cy_init, cx_init = np.unravel_index(np.argmin(distances), distances.shape)
-            print(f"[DepthHandler] Adjusted centroid to be inside mask: ({cx_init}, {cy_init})")
+        print(f"[DepthHandler] Found {len(mask_y_coords)} mask pixels")
 
-        # 3) Dynamic patch expansion until >=3 valid depths
-        max_patch = 25  # up to 25x25
-        patch_size = 5
-        patch = None
-        nonzero = 0
-        while patch_size <= max_patch:
-            radius = patch_size // 2
-            y0 = max(cy_init - radius, 0)
-            y1 = min(cy_init + radius, h_d - 1)
-            x0 = max(cx_init - radius, 0)
-            x1 = min(cx_init + radius, w_d - 1)
-            patch = depth_arr[y0:y1+1, x0:x1+1].astype(np.float32)
-            flat = patch.flatten()
-            nonzero = np.count_nonzero(flat)
-            print(f"[DepthHandler] {patch_size}x{patch_size} patch depths (mm): {flat.tolist()}")
-            if nonzero >= 3:
-                break
-            patch_size += 2
-        if patch is None or nonzero == 0:
-            print(f"[DepthHandler] No non-zero depths found up to {max_patch}x{max_patch} patch.")
+        # 3) Calculate CENTER OF MASS of the actual mask pixels (not bounding box!)
+        # This is the true centroid of the segmented object
+        cx_centroid = float(np.mean(mask_x_coords))
+        cy_centroid = float(np.mean(mask_y_coords))
+        
+        # Round to integer pixel coordinates
+        cx_final = int(round(cx_centroid))
+        cy_final = int(round(cy_centroid))
+        
+        print(f"[DepthHandler] True mask centroid (center of mass): ({cx_centroid:.2f}, {cy_centroid:.2f})")
+        print(f"[DepthHandler] Rounded to pixel: ({cx_final}, {cy_final})")
+        
+        # 4) VERIFY this point is actually inside the mask
+        if not mask_depth[cy_final, cx_final]:
+            print(f"[DepthHandler] WARNING: Rounded centroid ({cx_final}, {cy_final}) is outside mask!")
+            # Find the closest actual mask pixel
+            distances = ((mask_y_coords - cy_final)**2 + (mask_x_coords - cx_final)**2)
+            closest_idx = np.argmin(distances)
+            cx_final = int(mask_x_coords[closest_idx])
+            cy_final = int(mask_y_coords[closest_idx])
+            print(f"[DepthHandler] Adjusted to closest mask pixel: ({cx_final}, {cy_final})")
+        
+        # 5) Final verification
+        if mask_depth[cy_final, cx_final]:
+            print(f"[DepthHandler] ✅ Final center ({cx_final}, {cy_final}) is confirmed inside mask")
+        else:
+            print(f"[DepthHandler] ❌ ERROR: Final center ({cx_final}, {cy_final}) is STILL outside mask!")
             return None
 
-        # 4) Filter non-zero values and cluster by tolerance
-        vals = flat[flat > 0]
-        vals_m = vals / 1000.0
-        med = np.median(vals_m)
-        rel_tol = 0.10 * med
-        abs_tol = 0.02
-        tol = max(rel_tol, abs_tol)
-        good = vals_m[np.abs(vals_m - med) <= tol]
-        if good.size < (vals_m.size / 2):
-            good = vals_m
-        z_m = float(np.mean(good))
+        # 6) Get depth at the center point
+        center_depth_mm = depth_arr[cy_final, cx_final]
+        if center_depth_mm == 0:
+            print(f"[DepthHandler] WARNING: No depth at center point, expanding search...")
+            # Expand search around center point
+            for radius in range(1, 10):
+                y_start = max(0, cy_final - radius)
+                y_end = min(h_d, cy_final + radius + 1)
+                x_start = max(0, cx_final - radius)
+                x_end = min(w_d, cx_final + radius + 1)
+                
+                patch = depth_arr[y_start:y_end, x_start:x_end]
+                mask_patch = mask_depth[y_start:y_end, x_start:x_end]
+                
+                # Only consider depths that are also inside the mask
+                valid_depths = patch[mask_patch & (patch > 0)]
+                if len(valid_depths) > 0:
+                    center_depth_mm = int(np.median(valid_depths))
+                    print(f"[DepthHandler] Found depth {center_depth_mm}mm at radius {radius}")
+                    break
+        
+        z_m = center_depth_mm / 1000.0
+        if z_m <= 0:
+            print("[DepthHandler] No valid depth found for center point")
+            return None
 
-        # 5) Build front-face mask and bounding-box based on tolerance around median
-        depth_m = depth_arr.astype(np.float32) / 1000.0
-        front = mask_depth & (np.abs(depth_m - med) <= tol)
-        if front.sum() < (mask_depth.sum() * 0.1):
-            front = mask_depth
-        ys_f, xs_f = np.where(front)
-        x_min, x_max = xs_f.min(), xs_f.max()
-        y_min, y_max = ys_f.min(), ys_f.max()
+        # 7) Calculate bounding box for size estimation (but NOT for center!)
+        x_min, x_max = mask_x_coords.min(), mask_x_coords.max()
+        y_min, y_max = mask_y_coords.min(), mask_y_coords.max()
         px_w = x_max - x_min + 1
         px_h = y_max - y_min + 1
 
-        # 6) Compute oriented bounding box to account for rotation
+        # 8) Try to get oriented bounding box for better size estimation
         oriented_width_px = px_w
         oriented_height_px = px_h
         angle = 0.0
         try:
-            # Convert mask to contours for minAreaRect
-            mask_uint8 = front.astype(np.uint8) * 255
+            mask_uint8 = mask_depth.astype(np.uint8) * 255
             contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
-                # Use the largest contour
                 largest_contour = max(contours, key=cv2.contourArea)
-                # Compute minimum area rectangle
                 rect = cv2.minAreaRect(largest_contour)
-                center, (oriented_width_px, oriented_height_px), angle = rect
-                # Ensure width is the smaller dimension (smallest distance across center)
+                rect_center, (oriented_width_px, oriented_height_px), angle = rect
+                
+                # NOTE: We DO NOT use rect_center for the object center!
+                # We use our calculated center of mass instead!
+                
                 if oriented_width_px > oriented_height_px:
                     oriented_width_px, oriented_height_px = oriented_height_px, oriented_width_px
-                    angle += 90  # Adjust angle for swapped dimensions
-                print(f"[DepthHandler] Oriented bounding box: width={oriented_width_px}px, height={oriented_height_px}px, angle={angle}deg")
-            else:
-                print("[DepthHandler] No contours found for oriented bounding box. Falling back to axis-aligned bounding box.")
+                    angle += 90
+                print(f"[DepthHandler] Oriented box size: {oriented_width_px:.1f}x{oriented_height_px:.1f}px, angle={angle:.1f}°")
+                print(f"[DepthHandler] BUT using center of mass for 3D position, NOT bounding box center!")
         except Exception as e:
-            print(f"[DepthHandler] Error computing oriented bounding box: {e}. Falling back to axis-aligned bounding box.")
+            print(f"[DepthHandler] Error computing oriented bounding box: {e}")
 
-        # 7) Compute physical size via pinhole model using oriented dimensions
+        # 9) Compute physical size using oriented dimensions
         if not self.rs_active:
             print("[DepthHandler] RealSense not active")
             return None
+        
         intr = (
             self.rs_pipeline
                 .get_active_profile()
@@ -294,28 +302,48 @@ class DepthHandler:
                 .as_video_stream_profile()
                 .get_intrinsics()
         )
+        
         width_m = (oriented_width_px * z_m) / intr.fx
         height_m = (oriented_height_px * z_m) / intr.fy
 
-        # 8) Apply fixed scale factor for calibration (e.g., 0.62)
+        # 10) Apply scale factor and convert to mm
         fixed_scale = 0.62
         width_m *= fixed_scale
         height_m *= fixed_scale
-        print(f"[DepthHandler] Applied fixed scale factor: {fixed_scale}")
+        width_mm = width_m * 1000
+        height_mm = height_m * 1000
 
-        # 9) Deproject centroid to 3D XYZ and compute distance
+        # 11) Adjust orientation
+        if width_mm > height_mm:
+            corrected_angle = angle % 180
+        else:
+            corrected_angle = (angle + 90) % 180
+            width_mm, height_mm = height_mm, width_mm
+        
+        if corrected_angle > 90:
+            corrected_angle = 180 - corrected_angle
+
+        # 12) Deproject the TRUE CENTER OF MASS to 3D coordinates
         center_xyz = rs.rs2_deproject_pixel_to_point(
-            intr, [float(cx_init), float(cy_init)], z_m
+            intr, [float(cx_final), float(cy_final)], z_m
         )
+        center_xyz_mm = [coord * 1000 for coord in center_xyz]
         distance_m = float(np.linalg.norm(center_xyz))
 
+        print(f"[DepthHandler] Final result:")
+        print(f"  - Center pixel: ({cx_final}, {cy_final}) [center of mass of mask]")
+        print(f"  - Center 3D: {[round(c) for c in center_xyz_mm]} mm")
+        print(f"  - Size: {round(height_mm)}x{round(width_mm)} mm")
+        print(f"  - Orientation: {round(corrected_angle)}°")
+
         return {
-            "center_xyz_m": center_xyz,
+            "center_xyz_mm": center_xyz_mm,
             "distance_m": distance_m,
-            "width_m": float(width_m),
-            "height_m": float(height_m),
+            "width_mm": float(width_mm),      # Shorter dimension
+            "length_mm": float(height_mm),    # Longer dimension  
             "bbox_px": [int(x_min), int(y_min), int(x_max), int(y_max)],
-            "oriented_angle_deg": float(angle),  # Include orientation for debugging or further use
+            "orientation_deg": float(corrected_angle),
+            "center_px": [int(cx_final), int(cy_final)],  # TRUE center of mass
             "oriented_bbox_px": {
                 "width": float(oriented_width_px),
                 "height": float(oriented_height_px)
