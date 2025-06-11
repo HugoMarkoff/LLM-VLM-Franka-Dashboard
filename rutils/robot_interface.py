@@ -18,7 +18,9 @@ class FrankaRobotInterface:
         self.logger = logger
         self.selenium = SeleniumHelper(driver, config, logger)
         self.locators = FrankaLocators()
-    
+        # Add commands instance for utility methods
+        self._commands = None
+        
     def is_dashboard_loaded(self) -> bool:
         """Quick check if we're already in the dashboard using 'Pilot'."""
         pilot_elem = self.selenium.try_multiple_locators([
@@ -34,6 +36,49 @@ class FrankaRobotInterface:
             (By.XPATH, "//*[contains(text(), 'Another user')]"),
         ], timeout=1)
         return conflict_elem is not None
+
+    @property
+    def commands(self):
+        """Lazy initialization of commands instance to avoid circular import."""
+        if self._commands is None:
+            from .robot_commands import FrankaRobotCommands
+            self._commands = FrankaRobotCommands(self, self.logger)
+        return self._commands
+
+    def stop_any_running_task(self) -> bool:
+        """Check if there's a running task and stop it during initialization."""
+        self.logger.info("🔍 Checking for any running tasks...")
+        
+        try:
+            # Use the same locators as click_stop_button
+            stop_button_locators = [
+                (By.XPATH, "/html/body/div[2]/section/one-sidebar/div[2]/div/div[2]/footer/section/div/div"),
+                (By.XPATH, "/html/body/div[2]/section/one-sidebar/div[1]/div/div[2]/footer/section/div/div"),
+                (By.CSS_SELECTOR, "one-sidebar footer section div div"),
+                (By.XPATH, "//footer//section//div//div[contains(@class, 'execution-button')]"),
+            ]
+            
+            stop_button = self.selenium.try_multiple_locators(stop_button_locators, timeout=2)
+            if stop_button:
+                # Check if it's actually a stop button (task running)
+                button_html = stop_button.get_attribute('outerHTML') or ""
+                button_classes = stop_button.get_attribute("class") or ""
+                
+                if ("stop" in button_html.lower() or "cancel" in button_html.lower() or
+                    "stop" in button_classes.lower()):
+                    self.logger.info("🛑 Found running task - stopping it...")
+                    # Use the existing click_stop_button from commands
+                    return self.commands.click_stop_button()
+                else:
+                    self.logger.info("✅ No running tasks detected")
+                    return True
+            else:
+                self.logger.info("✅ No running tasks detected")
+                return True
+                
+        except Exception as e:
+            self.logger.warning(f"⚠️ Error checking for running tasks: {e}")
+            return True  # Continue anyway
     
     def navigate_and_login(self) -> None:
         """Navigate to robot interface and handle authentication efficiently."""
@@ -205,6 +250,10 @@ class FrankaRobotInterface:
     
     def ensure_joints_unlocked(self) -> None:
         """Ensure robot joints are unlocked and robot is ready."""
+        
+        # First, stop any running tasks from previous sessions
+        self.stop_any_running_task()
+        
         status = self.check_robot_status()
         
         if status['ready']:

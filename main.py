@@ -51,6 +51,9 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
     def move_robot(x=0, y=0, z=0, speed=5, acceleration=5):
         return automation.commands.move_robot(x, y, z, speed, acceleration)
     
+    def suction_on(load=None, vacuum=None, timeout=None):
+        return automation.suction_on(load=load, vacuum=vacuum, timeout=timeout)
+    
     def robot_status():
         return automation.robot.check_robot_status()
     
@@ -62,6 +65,7 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
         'open_gripper': open_gripper,
         'close_gripper': close_gripper,
         'move_robot': move_robot,
+        'suction_on': suction_on,
         'robot_status': robot_status,
         'automation': automation,
     }
@@ -75,6 +79,8 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
     print("  open_gripper()                           - Execute gripper open")
     print("  close_gripper()                          - Execute gripper close")
     print("  move_robot(x=0, y=0, z=0, speed=5, accel=5) - Move robot relative")
+    print("  suction_on(load=1000, vacuum=650, timeout=5.0) - Execute suction with config")
+    print("  suction_on()                             - Execute suction with current config")
     print("  robot_status()                           - Check robot status")
     print("  robot                                    - Access full robot instance")
     print("\nParameter ranges:")
@@ -84,6 +90,9 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
     print("  Robot speed:   5-100     (movement speed %)")
     print("  Robot accel:   5-100     (acceleration %)")
     print("  Robot x,y,z:   any float (relative movement in mm)")
+    print("  Suction load:  0-2000    (load capacity)")
+    print("  Suction vacuum: 550-750  (vacuum strength)")
+    print("  Suction timeout: 0.5-10  (timeout in seconds)")
     print("\nExamples:")
     print("  config_open(30)                 # Set open speed to 30%")
     print("  config_close(60, 85, 500)      # Set close: 60% speed, 85N force, 500g load")
@@ -93,6 +102,9 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
     print("  move_robot(10, 0, 5)            # Move +10mm X, +5mm Z")
     print("  move_robot(-5, 10, 0, 10, 15)   # Move -5mm X, +10mm Y, 10% speed, 15% accel")
     print("  move_robot(z=-20)               # Move -20mm Z only")
+    print("  suction_on(1500, 700, 8.0)     # Configure and run: 1500 load, 700 vacuum, 8s timeout")
+    print("  suction_on(load=800)            # Configure and run: 800 load, defaults for others")
+    print("  suction_on()                    # Run with current configuration")
     print("  exit()                          # Exit shell")
     print("="*60)
     
@@ -213,6 +225,17 @@ class FrankaAutomation:
         self.logger.info("🛑 Stopping robot session...")
         self.cleanup()
         self._is_initialized = False
+
+    def suction_on(self, load: int = None, vacuum: int = None, timeout: float = None) -> bool:
+        """Execute suction_on command. If parameters provided, configure first."""
+        if not self.is_robot_ready():
+            return False
+        
+        try:
+            return self.commands.suction_on(load=load, vacuum=vacuum, timeout=timeout)
+        except Exception as e:
+            self.logger.error(f"❌ Suction_on failed: {e}")
+        return False
     
     def keep_alive(self, interactive: bool = False) -> None:
         """Keep the robot session alive until user interrupts."""
@@ -366,19 +389,19 @@ def main():
         description="Franka Desk Selenium Automation - Modular Version",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  python main.py                          # Full automation with GUI
-  python main.py --headless               # Headless automation
-  python main.py --init-only              # Initialize robot only, keep UI open
-  python main.py --init-only --interactive # Interactive shell with robot commands
-  python main.py --config-only            # Configure tasks only
+        Examples:
+        python main.py                          # Full automation with GUI
+        python main.py --headless               # Headless automation
+        python main.py --init-only              # Initialize robot only, keep UI open
+        python main.py --init-only --interactive # Interactive shell with robot commands
+        python main.py --config-only            # Configure tasks only
 
-Interactive shell usage:
-  python main.py --init-only --interactive
-  >>> config_open(30)        # Configure gripper open speed
-  >>> open_gripper()         # Execute gripper open
-  >>> close_gripper()        # Execute gripper close
-  >>> exit()                 # Exit shell
+        Interactive shell usage:
+        python main.py --init-only --interactive
+        >>> config_open(30)        # Configure gripper open speed
+        >>> open_gripper()         # Execute gripper open
+        >>> close_gripper()        # Execute gripper close
+        >>> exit()                 # Exit shell
         """
     )
     
