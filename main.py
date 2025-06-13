@@ -54,8 +54,11 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
     def suction_on(load=None, vacuum=None, timeout=None):
         return automation.suction_on(load=load, vacuum=vacuum, timeout=timeout)
     
-    def suction_off():
-        return automation.suction_off()
+    def get_current_pos():
+        return automation.get_current_pos()
+    
+    def move_to_home():
+        return automation.move_to_home()
     
     def robot_status():
         return automation.robot.check_robot_status()
@@ -69,7 +72,8 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
         'close_gripper': close_gripper,
         'move_robot': move_robot,
         'suction_on': suction_on,
-        'suction_off': suction_off,
+        'get_current_pos': get_current_pos,
+        'move_to_home': move_to_home,
         'robot_status': robot_status,
         'automation': automation,
     }
@@ -85,7 +89,8 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
     print("  move_robot(x=0, y=0, z=0, speed=5, accel=5) - Move robot relative")
     print("  suction_on(load=1000, vacuum=650, timeout=5.0) - Execute suction with config")
     print("  suction_on()                             - Execute suction with current config")
-    print("  suction_off()                            - Execute suction off")
+    print("  get_current_pos()                        - Get current robot position & rotation")
+    print("  move_to_home()                           - Move robot to home position")
     print("  robot_status()                           - Check robot status")
     print("  robot                                    - Access full robot instance")
     print("\nParameter ranges:")
@@ -99,18 +104,11 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
     print("  Suction vacuum: 550-750  (vacuum strength)")
     print("  Suction timeout: 0.5-10  (timeout in seconds)")
     print("\nExamples:")
+    print("  get_current_pos()               # Get current position and rotation")
+    print("  move_to_home()                  # Move to home position")
     print("  config_open(30)                 # Set open speed to 30%")
-    print("  config_close(60, 85, 500)      # Set close: 60% speed, 85N force, 500g load")
-    print("  config_close()                  # Use defaults (50% speed, 80N force, 400g load)")
-    print("  open_gripper()                  # Open gripper")
-    print("  close_gripper()                 # Close gripper")
     print("  move_robot(10, 0, 5)            # Move +10mm X, +5mm Z")
-    print("  move_robot(-5, 10, 0, 10, 15)   # Move -5mm X, +10mm Y, 10% speed, 15% accel")
-    print("  move_robot(z=-20)               # Move -20mm Z only")
-    print("  suction_on(1500, 700, 8.0)     # Configure and run: 1500 load, 700 vacuum, 8s timeout")
-    print("  suction_on(load=800)            # Configure and run: 800 load, defaults for others")
-    print("  suction_on()                    # Run with current configuration")
-    print("  suction_off()                   # Execute suction off")
+    print("  suction_on(1500, 700, 8.0)     # Configure and run suction")
     print("  exit()                          # Exit shell")
     print("="*60)
     
@@ -163,6 +161,28 @@ class FrankaAutomation:
             self.save_debug_info()
             return False
     
+    def get_current_pos(self) -> dict:
+        """Get current robot position - wrapper for interactive use."""
+        if not self.is_robot_ready():
+            return None
+        
+        try:
+            return self.commands.get_current_position()
+        except Exception as e:
+            self.logger.error(f"❌ Get position failed: {e}")
+            return None
+
+    def move_to_home(self) -> bool:
+        """Move robot to home position - wrapper for interactive use."""
+        if not self.is_robot_ready():
+            return False
+        
+        try:
+            return self.commands.move_to_home_position()
+        except Exception as e:
+            self.logger.error(f"❌ Move to home failed: {e}")
+            return False
+
     def is_robot_ready(self) -> bool:
         """Check if robot is initialized and ready."""
         if not self._is_initialized or not self.driver or not self.robot:

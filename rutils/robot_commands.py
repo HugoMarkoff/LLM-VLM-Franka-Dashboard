@@ -1071,3 +1071,140 @@ class FrankaRobotCommands:
         
         self.logger.info("✅ Suction_on executed successfully")
         return True
+
+    def get_current_position(self) -> dict:
+        """Get current robot end-effector position and orientation."""
+        self.logger.info("📍 Getting current robot position...")
+        
+        try:
+            # 0. Wait for any current task to complete first
+            if not self.wait_for_task_completion(timeout=10):
+                self.logger.warning("⚠️ Previous task still running, waiting...")
+            
+            # 1. Select Where_am_i task
+            if not self.select_task_from_list("Where_am_i"):
+                return None
+            
+            # 2. Click task icon to configure
+            if not self.click_task_icon_for_config():
+                return None
+            
+            # 3. Wait for coordinates to load and extract them
+            import time
+            time.sleep(1)  # Give time for coordinates to load
+            
+            position_data = {}
+            
+            try:
+                # Extract position (x, y, z in mm)
+                position_xpath = "/html/body/div[2]/section/section/section/one-timeline/div[3]/div/one-container/div/one-timeline-skill/div/one-context-menu/div/div[3]/div[1]/div/step/show-ee-coordinates/div/div[1]/div[1]"
+                position_element = self.wait_for_element((By.XPATH, position_xpath), timeout=10)
+                
+                if position_element:
+                    position_text = position_element.text.strip()
+                    self.logger.info(f"📐 Position text: {position_text}")
+                    position_data["position_raw"] = position_text
+                    
+                    # Try to parse position values (format might be "X: 123.45 Y: 234.56 Z: 345.67")
+                    import re
+                    position_matches = re.findall(r'([XYZ]):\s*(-?\d+\.?\d*)', position_text)
+                    if position_matches:
+                        for axis, value in position_matches:
+                            position_data[f"pos_{axis.lower()}"] = float(value)
+                else:
+                    self.logger.error("❌ Could not find position element")
+                
+                # Extract rotation (rx, ry, rz)
+                rotation_xpath = "/html/body/div[2]/section/section/section/one-timeline/div[3]/div/one-container/div/one-timeline-skill/div/one-context-menu/div/div[3]/div[1]/div/step/show-ee-coordinates/div/div[1]/div[2]"
+                rotation_element = self.wait_for_element((By.XPATH, rotation_xpath), timeout=10)
+                
+                if rotation_element:
+                    rotation_text = rotation_element.text.strip()
+                    self.logger.info(f"🔄 Rotation text: {rotation_text}")
+                    position_data["rotation_raw"] = rotation_text
+                    
+                    # Try to parse rotation values
+                    rotation_matches = re.findall(r'([XYZ]):\s*(-?\d+\.?\d*)', rotation_text)
+                    if rotation_matches:
+                        for axis, value in rotation_matches:
+                            position_data[f"rot_{axis.lower()}"] = float(value)
+                else:
+                    self.logger.error("❌ Could not find rotation element")
+                    
+            except Exception as e:
+                self.logger.error(f"❌ Error extracting coordinates: {e}")
+            
+            # 4. Click Continue button twice to exit
+            self.logger.info("➡️ Exiting position dialog...")
+            if not self.click_continue_button():
+                self.logger.error("❌ Failed to click first Continue button")
+            
+            if not self.click_continue_button():
+                self.logger.error("❌ Failed to click second Continue button")
+            
+            self.logger.info(f"✅ Current position retrieved: {position_data}")
+            return position_data
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to get current position: {e}")
+            return None
+
+    def move_to_home_position(self) -> bool:
+        """Move robot to home position using the Where_am_i task."""
+        self.logger.info("🏠 Moving robot to home position...")
+        
+        try:
+            # 0. Wait for any current task to complete first
+            if not self.wait_for_task_completion(timeout=10):
+                self.logger.warning("⚠️ Previous task still running, waiting...")
+            
+            # 1. Select Where_am_i task
+            if not self.select_task_from_list("Where_am_i"):
+                return False
+            
+            # 2. Click task icon to configure
+            if not self.click_task_icon_for_config():
+                return False
+            
+            # 3. Wait for interface to load
+            import time
+            time.sleep(1)
+            
+            # 4. Click "Move to pose" button
+            move_to_pose_xpath = "/html/body/div[2]/section/section/section/one-timeline/div[3]/div/one-container/div/one-timeline-skill/div/one-context-menu/div/div[3]/div[1]/div/step/show-ee-coordinates/div/div[2]/div[3]/button"
+            
+            move_button = self.wait_for_element((By.XPATH, move_to_pose_xpath), timeout=10)
+            if not move_button:
+                self.logger.error("❌ Could not find 'Move to pose' button")
+                return False
+            
+            if not self.selenium.click_element_robust(move_button):
+                self.logger.error("❌ Failed to click 'Move to pose' button")
+                return False
+            
+            self.logger.info("✅ Clicked 'Move to pose' button")
+            
+            # 5. Wait for movement to start/complete (might take a moment)
+            time.sleep(2)
+            
+            # 6. Click Continue button twice to exit
+            self.logger.info("➡️ Exiting home position dialog...")
+            if not self.click_continue_button():
+                self.logger.error("❌ Failed to click first Continue button")
+                return False
+            
+            if not self.click_continue_button():
+                self.logger.error("❌ Failed to click second Continue button")
+                return False
+            
+            # 7. Wait for movement to complete
+            if not self.wait_for_task_completion(timeout=30):
+                self.logger.error("❌ Home movement did not complete properly")
+                return False
+            
+            self.logger.info("✅ Robot moved to home position successfully")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to move to home position: {e}")
+            return False
