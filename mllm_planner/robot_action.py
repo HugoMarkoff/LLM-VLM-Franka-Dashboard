@@ -3,20 +3,22 @@
 Franka Desk Selenium Automation Suite - Modular Version
 ======================================================
 
-A robust automation framework for Franka Desk robot interface.
+Args from planner: plan: (Object, (x, y, z), action) -> (Object, (15, 20, 30), action) -> ...
 
-Usage:
-    python main.py --init-only          # Initialize robot, keep browser open
-    python main.py --init-only --interactive # Interactive shell with robot commands
-    python main.py --headless           # Full automation headless
-    python main.py --config-only        # Configure tasks only
 """
 
 import sys
 import time
 import argparse
 import subprocess
-from typing import Optional
+import re
+from typing import Optional, List, Tuple
+from pathlib import Path
+
+# Add parent directory to Python path to find rutils
+current_dir = Path(__file__).parent
+parent_dir = current_dir.parent
+sys.path.insert(0, str(parent_dir))
 
 # Selenium imports
 from selenium import webdriver
@@ -29,96 +31,6 @@ from rutils.chrome_manager import ChromeDriverManager
 from rutils.robot_interface import FrankaRobotInterface
 from rutils.robot_commands import FrankaRobotCommands
 from rutils.signal_handler import GracefulKiller
-
-
-def run_interactive_shell(automation: 'FrankaAutomation'):
-    """Run interactive Python shell with robot commands available."""
-    import code
-    
-    # Create convenient command shortcuts
-    def config_open(speed=20):
-        return automation.gripper_open_config(speed)
-    
-    def config_close(speed=50, force=80, load=400):
-        return automation.gripper_close_config(speed, force, load)
-    
-    def open_gripper():
-        return automation.gripper_open()
-    
-    def close_gripper():
-        return automation.gripper_close()
-    
-    def move_robot(x=0, y=0, z=0, speed=5, acceleration=5):
-        return automation.commands.move_robot(x, y, z, speed, acceleration)
-    
-    def suction_on(load=None, vacuum=None, timeout=None):
-        return automation.suction_on(load=load, vacuum=vacuum, timeout=timeout)
-    
-    def suction_off():
-        return automation.suction_off()
-    
-    def robot_status():
-        return automation.robot.check_robot_status()
-    
-    # Create interactive namespace
-    interactive_locals = {
-        'robot': automation,
-        'config_open': config_open,
-        'config_close': config_close, 
-        'open_gripper': open_gripper,
-        'close_gripper': close_gripper,
-        'move_robot': move_robot,
-        'suction_on': suction_on,
-        'suction_off': suction_off,
-        'robot_status': robot_status,
-        'automation': automation,
-    }
-    
-    print("\n" + "="*60)
-    print("🤖 FRANKA ROBOT INTERACTIVE SHELL")
-    print("="*60)
-    print("Available commands:")
-    print("  config_open(speed=20)                    - Configure gripper open")
-    print("  config_close(speed=50, force=80, load=400) - Configure gripper close") 
-    print("  open_gripper()                           - Execute gripper open")
-    print("  close_gripper()                          - Execute gripper close")
-    print("  move_robot(x=0, y=0, z=0, speed=5, accel=5) - Move robot relative")
-    print("  suction_on(load=1000, vacuum=650, timeout=5.0) - Execute suction with config")
-    print("  suction_on()                             - Execute suction with current config")
-    print("  suction_off()                            - Execute suction off")
-    print("  robot_status()                           - Check robot status")
-    print("  robot                                    - Access full robot instance")
-    print("\nParameter ranges:")
-    print("  Gripper speed: 10-100    (speed %)")
-    print("  Gripper force: 20-100    (grasping force in Newtons)")
-    print("  Gripper load:  10-1000   (load capacity in grams)")
-    print("  Robot speed:   5-100     (movement speed %)")
-    print("  Robot accel:   5-100     (acceleration %)")
-    print("  Robot x,y,z:   any float (relative movement in mm)")
-    print("  Suction load:  0-2000    (load capacity)")
-    print("  Suction vacuum: 550-750  (vacuum strength)")
-    print("  Suction timeout: 0.5-10  (timeout in seconds)")
-    print("\nExamples:")
-    print("  config_open(30)                 # Set open speed to 30%")
-    print("  config_close(60, 85, 500)      # Set close: 60% speed, 85N force, 500g load")
-    print("  config_close()                  # Use defaults (50% speed, 80N force, 400g load)")
-    print("  open_gripper()                  # Open gripper")
-    print("  close_gripper()                 # Close gripper")
-    print("  move_robot(10, 0, 5)            # Move +10mm X, +5mm Z")
-    print("  move_robot(-5, 10, 0, 10, 15)   # Move -5mm X, +10mm Y, 10% speed, 15% accel")
-    print("  move_robot(z=-20)               # Move -20mm Z only")
-    print("  suction_on(1500, 700, 8.0)     # Configure and run: 1500 load, 700 vacuum, 8s timeout")
-    print("  suction_on(load=800)            # Configure and run: 800 load, defaults for others")
-    print("  suction_on()                    # Run with current configuration")
-    print("  suction_off()                   # Execute suction off")
-    print("  exit()                          # Exit shell")
-    print("="*60)
-    
-    # Start interactive shell
-    try:
-        code.interact(local=interactive_locals, banner="")
-    except (EOFError, KeyboardInterrupt):
-        print("\n🛑 Exiting interactive shell...")
 
 
 class FrankaAutomation:
@@ -232,7 +144,6 @@ class FrankaAutomation:
         self.cleanup()
         self._is_initialized = False
 
-    
     def suction_on(self, load: int = None, vacuum: int = None, timeout: float = None) -> bool:
         """Execute suction_on command. If parameters provided, configure first."""
         if not self.is_robot_ready():
@@ -254,6 +165,109 @@ class FrankaAutomation:
         except Exception as e:
             self.logger.error(f"❌ Suction_off failed: {e}")
         return False
+
+    def move_robot(self, x: float = 0, y: float = 0, z: float = 0, speed: int = 5, acceleration: int = 5) -> bool:
+        """Execute robot movement command."""
+        if not self.is_robot_ready():
+            return False
+        
+        try:
+            return self.commands.move_robot(x=x, y=y, z=z, speed=speed, acceleration=acceleration)
+        except Exception as e:
+            self.logger.error(f"❌ Robot movement failed: {e}")
+        return False
+    
+    def parse_plan_string(self, plan_string: str) -> List[Tuple[str, Tuple[float, float, float], str]]:
+        """
+        Parse plan string into list of actions.
+        Format: "plan: (Object, (x, y, z), action) -> (Object, (x, y, z), action) -> ..."
+        Returns: List of tuples (object_name, (x, y, z), action)
+        """
+        self.logger.info(f"🔍 Parsing plan string: {plan_string}")
+        
+        # Remove "plan: " prefix if present
+        if plan_string.startswith("plan: "):
+            plan_string = plan_string[6:]
+        
+        # Split by "->" to get individual actions
+        action_strings = plan_string.split(" -> ")
+        
+        parsed_actions = []
+        
+        for action_str in action_strings:
+            action_str = action_str.strip()
+            
+            # Pattern to match: (Object, (x, y, z), action)
+            pattern = r'\(([^,]+),\s*\(([^,]+),\s*([^,]+),\s*([^)]+)\),\s*([^)]+)\)'
+            match = re.match(pattern, action_str)
+            
+            if match:
+                object_name = match.group(1).strip()
+                x = float(match.group(2).strip())
+                y = float(match.group(3).strip())
+                z = float(match.group(4).strip())
+                action = match.group(5).strip()
+                
+                parsed_actions.append((object_name, (x, y, z), action))
+                self.logger.info(f"  ✅ Parsed: {object_name} at ({x}, {y}, {z}) -> {action}")
+            else:
+                self.logger.error(f"  ❌ Failed to parse action: {action_str}")
+        
+        return parsed_actions
+
+    def execute_plan(self, plan_string: str) -> bool:
+        """
+        Execute a plan string by parsing it and executing actions in sequence.
+        
+        Args:
+            plan_string: Plan in format "plan: (Object, (x, y, z), action) -> ..."
+            
+        Returns:
+            bool: True if all actions executed successfully, False otherwise
+        """
+        if not self.is_robot_ready():
+            self.logger.error("❌ Robot not ready for plan execution")
+            return False
+        
+        self.logger.info("🚀 Starting plan execution...")
+        
+        # Parse the plan string
+        parsed_actions = self.parse_plan_string(plan_string)
+        
+        if not parsed_actions:
+            self.logger.error("❌ No valid actions found in plan string")
+            return False
+        
+        # Execute each action in sequence
+        for i, (object_name, coordinates, action) in enumerate(parsed_actions, 1):
+            x, y, z = coordinates
+            self.logger.info(f"🎯 Step {i}/{len(parsed_actions)}: {action} {object_name} at ({x}, {y}, {z})")
+            
+            success = False
+            
+            if action.lower() == "move":
+                success = self.move_robot(x=x, y=y, z=z)
+                
+            elif action.lower() == "pick":
+                success = self.suction_on(load=1000, vacuum=650, timeout=2.0)
+                
+            elif action.lower() == "place":
+                success = self.suction_off()
+                
+            else:
+                self.logger.error(f"❌ Unknown action: {action}")
+                return False
+            
+            if not success:
+                self.logger.error(f"❌ Failed to execute step {i}: {action} {object_name}")
+                return False
+            
+            # Add delay between actions for stability
+            self.logger.info("⏳ Waiting 2 seconds before next action...")
+            time.sleep(2)
+        
+        self.logger.info("🎉 Plan execution completed successfully!")
+        return True
     
     def keep_alive(self, interactive: bool = False) -> None:
         """Keep the robot session alive until user interrupts."""
@@ -263,7 +277,7 @@ class FrankaAutomation:
         
         if interactive:
             # Drop into interactive Python shell
-            run_interactive_shell(self)
+            # run_interactive_shell(self)
             return
         
         self.logger.info("🔄 Robot session active - Press Ctrl+C to exit...")
@@ -401,113 +415,60 @@ class FrankaAutomation:
             self.logger.warning(f"Failed to save debug info: {e}")
 
 
-def main():
-    """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Franka Desk Selenium Automation - Modular Version",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-        Examples:
-        python main.py                          # Full automation with GUI
-        python main.py --headless               # Headless automation
-        python main.py --init-only              # Initialize robot only, keep UI open
-        python main.py --init-only --interactive # Interactive shell with robot commands
-        python main.py --config-only            # Configure tasks only
-
-        Interactive shell usage:
-        python main.py --init-only --interactive
-        >>> config_open(30)        # Configure gripper open speed
-        >>> open_gripper()         # Execute gripper open
-        >>> close_gripper()        # Execute gripper close
-        >>> exit()                 # Exit shell
-        """
-    )
+def execute_plan_from_planner(plan_string: str, headless: bool = False) -> bool:
+    """
+    Execute a plan string directly from the planner module.
+    This function is designed to be called by max_planner.py.
     
-    parser.add_argument("--headless", action="store_true", help="Run browser in headless mode")
-    parser.add_argument("--init-only", action="store_true", help="Initialize robot only, then keep UI open")
-    parser.add_argument("--interactive", action="store_true", help="Drop into interactive Python shell (use with --init-only)")
-    parser.add_argument("--config-only", action="store_true", help="Only configure tasks, don't execute them")
-    parser.add_argument("--setup-network", action="store_true", help="Set up network configuration and test connectivity")
-    parser.add_argument("--check-versions", action="store_true", help="Check Chrome and ChromeDriver versions")
-    parser.add_argument("--no-network-setup", action="store_true", help="Skip network configuration")
-    parser.add_argument("--robot-ip", default="172.16.0.2", help="Robot IP address (default: 172.16.0.2)")
-    parser.add_argument("--local-ip", default="172.16.0.1", help="Local IP address (default: 172.16.0.1)")
-    parser.add_argument("--interface", default="enp2s0", help="Network interface (default: enp2s0)")
-    
-    args = parser.parse_args()
-    
-    # Create configuration
-    config = Config(
-        robot_ip=args.robot_ip,
-        local_ip=args.local_ip,
-        network_interface=args.interface
-    )
-    
-    logger = setup_logging()
-    
-    # Handle version check
-    if args.check_versions:
-        chrome_manager = ChromeDriverManager(config, logger)
-        try:
-            import subprocess
-            import re
-            
-            commands = [
-                ["google-chrome", "--version"],
-                ["google-chrome-stable", "--version"],
-                ["chromium-browser", "--version"],
-                ["chromium", "--version"],
-            ]
-            
-            chrome_version = None
-            for cmd in commands:
-                try:
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-                    if result.returncode == 0:
-                        version_match = re.search(r'(\d+)\.(\d+)\.(\d+)\.(\d+)', result.stdout)
-                        if version_match:
-                            chrome_version = version_match.group(0)
-                            break
-                except:
-                    continue
-            
-            if chrome_version:
-                logger.info(f"🌍 Chrome version: {chrome_version}")
-            else:
-                logger.warning("⚠️ Could not determine Chrome version")
-            
-            driver_path = chrome_manager._get_chromedriver_auto()
-            logger.info(f"📍 Auto-managed ChromeDriver path: {driver_path}")
-            logger.info("✅ ChromeDriver auto-management working")
-            
-        except Exception as e:
-            logger.error(f"❌ ChromeDriver auto-management failed: {e}")
+    Args:
+        plan_string (str): Plan string in format "plan: (Object, (x, y, z), action) -> ..."
+        headless (bool): Whether to run browser in headless mode (default: False for GUI)
         
-        return 0
-    
-    # Handle network setup only
-    if args.setup_network:
-        network_manager = NetworkManager(config, logger)
+    Returns:
+        bool: True if execution successful, False otherwise
+    """
+    try:
+        # Use default configuration
+        config = Config(
+            robot_ip="172.16.0.2",
+            local_ip="172.16.0.1",
+            network_interface="enp2s0"
+        )
         
-        if network_manager.configure_network():
-            network_manager.test_robot_connectivity()
-            return 0
+        # Create automation instance
+        automation = FrankaAutomation(config)
+        
+        mode_text = "HEADLESS mode" if headless else "GUI mode"
+        print(f"🤖 Initializing robot for plan execution in {mode_text}...")
+        
+        # Initialize robot with configurable headless setting
+        if not automation.start_robot(headless=headless, setup_network=True):
+            print("❌ Failed to initialize robot")
+            return False
+        
+        print("✅ Robot initialized successfully")
+        
+        # Execute the plan
+        print(f"📋 Executing plan: {plan_string}")
+        success = automation.execute_plan(plan_string)
+        
+        if success:
+            print("✅ Plan execution completed successfully")
         else:
-            return 1
-    
-    # Run automation
-    automation = FrankaAutomation(config)
-    
-    success = automation.run_automation(
-        headless=args.headless,
-        init_only=args.init_only,
-        config_only=args.config_only,
-        interactive=args.interactive,
-        setup_network=not args.no_network_setup
-    )
-    
-    return 0 if success else 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+            print("❌ Plan execution failed")
+        
+        return success
+        
+    except Exception as e:
+        print(f"❌ Error in execute_plan_from_planner: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        # Ensure cleanup always happens
+        try:
+            print("🧹 Cleaning up robot session...")
+            automation.cleanup()
+            print("🛑 Robot session cleaned up")
+        except Exception as cleanup_error:
+            print(f"⚠️ Cleanup warning: {cleanup_error}")

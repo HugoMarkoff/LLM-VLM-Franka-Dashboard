@@ -894,6 +894,66 @@ class FrankaRobotCommands:
             self.logger.error(f"❌ Failed to move robot: {e}")
             return False
 
+    def suction_off(self) -> bool:
+        """Execute suction_off command."""
+        self.logger.info("🌪️ Turning off suction...")
+        
+        try:
+            # Wait for any current task to complete first
+            if not self.wait_for_task_completion(timeout=10):
+                self.logger.warning("⚠️ Previous task still running, waiting...")
+            
+            # 1. Select Suction_off task
+            if not self.select_task_from_list("Suction_off"):
+                return False
+            
+            # 2. Click the "detach" button in the workspace
+            self.logger.info("🔗 Clicking detach button...")
+            detach_button_path = "/html/body/div[2]/section/section/section/one-timeline/div[3]/div/one-container/div/one-timeline-skill/div/div/div[3]"
+            
+            detach_button = self.wait_for_element((By.XPATH, detach_button_path), timeout=10)
+            if not detach_button:
+                self.logger.error("❌ Detach button not found")
+                return False
+            
+            if not self.selenium.click_element_robust(detach_button):
+                self.logger.error("❌ Failed to click detach button")
+                return False
+            
+            self.logger.info("✅ Detach button clicked")
+            
+            # 3. Click Continue button to proceed through the single configuration page
+            if not self.click_continue_button():
+                self.logger.error("❌ Failed to click Continue button")
+                return False
+            
+            # 4. Execute the task
+            self.logger.info("▶️ Executing suction_off...")
+            if not self.click_execution_button():
+                return False
+            
+            if not self.click_confirm_button():
+                return False
+            
+            # 5. Wait for task completion
+            if not self.wait_for_task_completion():
+                return False
+            
+            # 6. Final error check
+            self.logger.info("🔍 Final check for task errors...")
+            if self.check_for_task_error(wait_for_error=True):
+                self.click_stop_button()
+                self.logger.error("❌ Suction_off failed with error")
+                return False
+            
+            self.logger.info("✅ Suction turned off successfully")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to turn off suction: {e}")
+            return False
+
+    
     def suction_on(self, load: int = None, vacuum: int = None, timeout: float = None) -> bool:
         """Execute suction_on command. If parameters provided, configure first."""
         
