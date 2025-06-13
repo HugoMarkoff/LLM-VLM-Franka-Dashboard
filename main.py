@@ -12,6 +12,7 @@ Usage:
     python main.py --config-only        # Configure tasks only
 """
 
+import threading
 import sys
 import time
 import argparse
@@ -132,6 +133,7 @@ class FrankaAutomation:
         self.commands: Optional[FrankaRobotCommands] = None
         self.killer: Optional[GracefulKiller] = None
         self._is_initialized = False
+        self._in_background_thread = not threading.current_thread() is threading.main_thread()
     
     def start_robot(self, headless: bool = False, setup_network: bool = True) -> bool:
         """Initialize robot and keep browser session active for future calls."""
@@ -146,14 +148,28 @@ class FrankaAutomation:
                 self.driver = self.chrome_manager.create_driver(headless)
                 self.robot = FrankaRobotInterface(self.driver, self.config, self.logger)
                 self.commands = FrankaRobotCommands(self.robot, self.logger)
-                self.killer = GracefulKiller(self)
+                
+                # Only create signal handler if not in background thread AND not interactive mode
+                import threading
+                if threading.current_thread() is threading.main_thread():
+                    self.killer = GracefulKiller(self)
+                else:
+                    self.logger.info("⚠️ Running in background thread - signal handling disabled")
+                    self.killer = None
             
             # Initialize robot
             self.robot.navigate_and_login()
             self.robot.ensure_joints_unlocked()
             
             self._is_initialized = True
-            self.logger.info("🎯 Robot ready for commands! Use individual functions or Ctrl+C to exit.")
+            
+            if headless:
+                self.logger.info("🎯 Robot ready for commands (headless mode)")
+            else:
+                self.logger.info("🎯 Robot ready for commands (interactive mode - browser visible)")
+                self.logger.info("👀 Franka Desk interface is now open in browser window")
+                self.logger.info("🎮 You can interact with both browser and dashboard controls")
+            
             return True
             
         except Exception as e:

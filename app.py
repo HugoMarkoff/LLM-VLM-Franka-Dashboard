@@ -21,7 +21,7 @@ import os
 from dotenv import load_dotenv
 
 # Add these imports after your existing imports
-import threading
+
 from rutils.config import Config
 from rutils.chrome_manager import ChromeDriverManager
 from rutils.robot_interface import FrankaRobotInterface
@@ -96,8 +96,69 @@ POINT_RE = re.compile(r"\(([0-9.+-eE]+)\s*,\s*([0-9.+-eE]+)\)")
 
 # ========== ROBOT CONTROL FUNCTIONS ==========
 
+def initialize_robot_system_interactive():
+    """Initialize robot in TRUE interactive mode - opens browser + enables dashboard controls."""
+    global robot_automation, robot_status
+    
+    try:
+        with robot_lock:
+            robot_status["state"] = "initializing"
+            robot_status["message"] = "Starting interactive mode (opening browser)..."
+        
+        # Create robot configuration
+        config = Config(
+            robot_ip="172.16.0.2",
+            local_ip="172.16.0.1", 
+            network_interface="enx34298f970c0c"  # Use detected interface
+        )
+        
+        # Initialize logger and managers
+        from rutils.logger import setup_logging
+        logger = setup_logging()
+        
+        # Import threading to check current thread
+        import threading
+        current_thread = threading.current_thread()
+        logger.info(f"Starting interactive mode in thread: {current_thread.name}")
+        
+        # Create the main automation instance
+        from main import FrankaAutomation
+        automation = FrankaAutomation(config)
+        
+        with robot_lock:
+            robot_status["message"] = "Opening browser and connecting to robot..."
+        
+        # Start robot in INTERACTIVE mode (NOT headless!)
+        success = automation.start_robot(headless=False, setup_network=True)  # ← headless=False!
+        
+        if success:
+            # Store the automation instance
+            robot_automation = automation
+            
+            with robot_lock:
+                robot_status["state"] = "ready"
+                robot_status["message"] = "Interactive mode ready! Browser open + Dashboard controls active"
+                robot_status["buttons_enabled"] = True
+            
+            logger.info("[INFO] 🎉 Interactive mode ready!")
+            logger.info("👀 Browser window opened with Franka Desk interface")
+            logger.info("🎮 Dashboard control buttons are now active")
+            logger.info("🔧 You can use BOTH the browser interface AND dashboard buttons")
+            
+        else:
+            raise Exception("Interactive mode initialization failed")
+        
+    except Exception as e:
+        with robot_lock:
+            robot_status["state"] = "error"
+            robot_status["message"] = f"Interactive mode error: {str(e)}"
+            robot_status["buttons_enabled"] = False
+        print(f"Interactive mode initialization error: {e}")
+        import traceback
+        traceback.print_exc()
+
 def initialize_robot_system():
-    """Initialize the robot system in a separate thread."""
+    """Initialize the robot system in standard mode (existing function - keep as is)."""
     global robot_automation, robot_status
     
     try:
@@ -670,6 +731,56 @@ def draw_centerpoint_circle(pil_img, center_x, center_y, mask_bool=None):
     
     return Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
 
+def execute_robot_movement_with_distance(direction, distance):
+    """Execute robot movement with custom distance."""
+    global robot_automation, robot_status
+    
+    if not robot_automation or not robot_automation.is_robot_ready():
+        return False, "Robot not ready"
+    
+    # Movement mappings with custom distance
+    movements = {
+        "up": {"z": -distance},     
+        "down": {"z": distance},    
+        "left": {"x": -distance},   
+        "right": {"x": distance},   
+        "forward": {"y": -distance}, 
+        "back": {"y": distance}     
+    }
+    
+    if direction not in movements:
+        return False, "Invalid direction"
+    
+    try:
+        with robot_lock:
+            robot_status["state"] = "moving"
+            robot_status["message"] = f"Moving {direction} {distance}mm..."
+        
+        # Execute movement
+        move_params = {"x": 0, "y": 0, "z": 0, "speed": 10, "acceleration": 10}
+        move_params.update(movements[direction])
+        
+        success = robot_automation.commands.move_robot(**move_params)
+        
+        with robot_lock:
+            if success:
+                robot_status["state"] = "ready"
+                robot_status["message"] = "Robot ready for commands"
+            else:
+                robot_status["state"] = "error"
+                robot_status["message"] = "Movement failed"
+                
+        return success, robot_status["message"]
+        
+    except Exception as e:
+        with robot_lock:
+            robot_status["state"] = "error"
+            robot_status["message"] = f"Movement error: {str(e)}"
+        print(f"Robot movement error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, str(e)
+
 ###########################
 # Flask Routes
 ###########################
@@ -699,7 +810,7 @@ def broadcast_to_llm_console(token):
 
 @app.route("/robot/initialize", methods=["POST"])
 def robot_initialize():
-    """Initialize the robot system."""
+    """Initialize the robot system with optional interactive mode."""
     global robot_status
     
     with robot_lock:
@@ -709,12 +820,21 @@ def robot_initialize():
         if robot_status["state"] == "ready":
             return jsonify({"error": "Robot already initialized"}), 400
     
+    # Get interactive mode parameter
+    data = request.json or {}
+    interactive_mode = data.get("interactive", False)
+    
     # Start initialization in background thread
-    init_thread = threading.Thread(target=initialize_robot_system)
+    if interactive_mode:
+        init_thread = threading.Thread(target=initialize_robot_system_interactive)
+    else:
+        init_thread = threading.Thread(target=initialize_robot_system)
+    
     init_thread.daemon = True
     init_thread.start()
     
-    return jsonify({"status": "Initialization started"})
+    mode_text = "interactive mode" if interactive_mode else "standard mode"
+    return jsonify({"status": f"Robot initialization started in {mode_text}"})
 
 @app.route("/robot/status", methods=["GET"])
 def robot_status_endpoint():
@@ -723,23 +843,30 @@ def robot_status_endpoint():
         return jsonify(robot_status.copy())
 
 @app.route("/robot/move/<direction>", methods=["POST"])
-def robot_move(direction):
-    """Move robot in specified direction."""
+def robot_move_with_distance(direction):
+    """Move robot in specified direction with custom distance."""
     global robot_status
     
     with robot_lock:
         if robot_status["state"] != "ready":
             return jsonify({"error": "Robot not ready"}), 400
     
+    data = request.json or {}
+    distance = data.get("distance", 20)  # Default to 20mm if not specified
+    
+    # Validate distance
+    if not isinstance(distance, (int, float)) or distance < 1 or distance > 500:
+        return jsonify({"error": "Distance must be between 1-500mm"}), 400
+    
     # Execute movement in background thread
     def move_thread():
-        execute_robot_movement(direction)
+        execute_robot_movement_with_distance(direction, distance)
     
     thread = threading.Thread(target=move_thread)
     thread.daemon = True
     thread.start()
     
-    return jsonify({"status": f"Moving {direction}"})
+    return jsonify({"status": f"Moving {direction} {distance}mm"})
 
 @app.route("/robot/stop", methods=["POST"])
 def robot_stop():
@@ -757,6 +884,99 @@ def robot_stop():
             robot_status["buttons_enabled"] = False
             
         return jsonify({"status": "Robot stopped"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/robot/position", methods=["GET"])
+def robot_get_position():
+    """Get current robot position."""
+    global robot_automation, robot_status
+    
+    with robot_lock:
+        if robot_status["state"] != "ready":
+            return jsonify({"error": "Robot not ready"}), 400
+    
+    if not robot_automation or not robot_automation.is_robot_ready():
+        return jsonify({"error": "Robot not available"}), 400
+    
+    try:
+        position = robot_automation.commands.get_current_position()
+        return jsonify(position or {})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# Enhanced suction endpoints to handle parameters
+@app.route("/robot/suction/on", methods=["POST"])
+def robot_suction_on():
+    """Turn robot suction on with optional parameters."""
+    global robot_automation, robot_status
+    
+    with robot_lock:
+        if robot_status["state"] != "ready":
+            return jsonify({"error": "Robot not ready"}), 400
+    
+    if not robot_automation or not robot_automation.is_robot_ready():
+        return jsonify({"error": "Robot not available"}), 400
+    
+    try:
+        # Get suction parameters from request
+        data = request.json or {}
+        load = data.get("load")
+        vacuum = data.get("vacuum") 
+        timeout = data.get("timeout")
+        
+        # Call suction_on with parameters
+        success = robot_automation.commands.suction_on(load=load, vacuum=vacuum, timeout=timeout)
+        
+        if success:
+            param_text = ""
+            if load is not None or vacuum is not None or timeout is not None:
+                param_text = f" (Load: {load}, Vacuum: {vacuum}, Timeout: {timeout}s)"
+            return jsonify({"status": f"Suction activated{param_text}"})
+        else:
+            return jsonify({"error": "Suction activation failed"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+        
+@app.route("/robot/suction/off", methods=["POST"])
+def robot_suction_off():
+    """Turn robot suction off."""
+    global robot_automation, robot_status
+    
+    with robot_lock:
+        if robot_status["state"] != "ready":
+            return jsonify({"error": "Robot not ready"}), 400
+    
+    if not robot_automation or not robot_automation.is_robot_ready():
+        return jsonify({"error": "Robot not available"}), 400
+    
+    try:
+        success = robot_automation.commands.suction_off()
+        if success:
+            return jsonify({"status": "Suction deactivated"})
+        else:
+            return jsonify({"error": "Suction deactivation failed"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/robot/home", methods=["POST"])
+def robot_move_home():
+    """Move robot to home position."""
+    global robot_automation, robot_status
+    
+    with robot_lock:
+        if robot_status["state"] != "ready":
+            return jsonify({"error": "Robot not ready"}), 400
+    
+    if not robot_automation or not robot_automation.is_robot_ready():
+        return jsonify({"error": "Robot not available"}), 400
+    
+    try:
+        success = robot_automation.commands.move_to_home_position()
+        if success:
+            return jsonify({"status": "Moved to home position"})
+        else:
+            return jsonify({"error": "Move to home failed"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

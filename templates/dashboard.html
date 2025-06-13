@@ -139,14 +139,14 @@
 
     /* Robot Control Button Styles */
     .robot-btn {
-      padding: 10px 20px;
+      padding: 6px 12px;
       border: 2px solid;
       border-radius: 5px;
-      font-size: 1.1em;
+      font-size: 0.9em;
       font-weight: bold;
       cursor: pointer;
       transition: all 0.3s ease;
-      min-width: 150px;
+      min-width: 100px;
     }
 
     .robot-btn-red {
@@ -179,15 +179,15 @@
     }
 
     .movement-btn {
-      padding: 8px 16px;
+      padding: 4px 8px;
       border: 2px solid #4af;
-      border-radius: 5px;
+      border-radius: 3px;
       background-color: #222;
       color: #4af;
-      font-size: 1em;
+      font-size: 0.8em;
       cursor: pointer;
       transition: all 0.3s ease;
-      min-width: 80px;
+      min-width: 60px;
     }
 
     .movement-btn:hover:not(:disabled) {
@@ -206,6 +206,17 @@
       background-color: #ffc107 !important;
       border-color: #ffc107 !important;
       color: #212529 !important;
+    }
+
+    /* Suction parameter inputs */
+    .suction-input {
+      width: 50px;
+      background: #222;
+      color: #4af;
+      border: 1px solid #4af;
+      padding: 2px;
+      text-align: center;
+      font-size: 0.7em;
     }
   </style>
 </head>
@@ -228,58 +239,115 @@
     </div>
   </div>
 
-  <!-- Row1, Col2: Robot Control -->
-  <div class="panel" style="grid-row:1; grid-column:2;">
+  <!-- Row1, Col2: Robot Control (Top 50% only) + Empty Space (50%) -->
+  <div class="panel" style="grid-row:1; grid-column:2; display:flex; flex-direction:column; padding:8px;">
     <div class="panel-title">Robot Control</div>
     
-    <!-- Robot Status Section -->
-    <div style="margin-top:2rem; text-align:center;">
-      <button id="robotInitBtn" class="robot-btn robot-btn-red" onclick="initializeRobot()">
-        Initialize Robot
-      </button>
-      <div id="robotStatus" style="margin-top:0.5rem; font-size:1em; color:#ccc;">
-        Robot not initialized
+    <!-- Top 50%: Robot Controls -->
+    <div style="height:50%; border-bottom:1px solid #444; padding-bottom:8px; margin-bottom:8px; display:flex;">
+      <!-- Left 80%: All Controls -->
+      <div style="width:80%; display:flex; flex-direction:column; padding-right:8px;">
+        
+      <!-- Row 1: Robot Status Section -->
+      <div style="display:flex; gap:8px; align-items:center; justify-content:center; margin-bottom:6px;">
+        <button id="robotInitBtn" class="robot-btn robot-btn-red" onclick="initializeRobot()">
+          Standard Mode
+        </button>
+        <button id="robotInteractiveBtn" class="robot-btn robot-btn-red" onclick="initializeRobotInteractive()">
+          Interactive Mode
+        </button>
       </div>
+      <div style="text-align:center; margin-bottom:6px;">
+        <div id="robotStatus" style="font-size:0.8em; color:#ccc;">Robot not initialized</div>
+        <div style="font-size:0.7em; color:#888; margin-top:2px;">
+          <strong>Interactive:</strong> Opens browser + enables manual controls<br>
+          <strong>Standard:</strong> Headless automation only
+        </div>
+      </div>
+        
+        <!-- Row 2: Distance Input and Movement Controls -->
+        <div style="display:flex; gap:8px; align-items:center; justify-content:center; margin-bottom:6px;">
+          <!-- Distance Input -->
+          <div style="display:flex; align-items:center; gap:4px;">
+            <label style="color:#4af; font-size:0.8em;">Distance:</label>
+            <input type="number" id="moveDistance" value="20" min="1" max="500" 
+                  style="width:50px; background:#222; color:#4af; border:1px solid #4af; padding:2px; text-align:center; font-size:0.8em;">
+            <span style="color:#4af; font-size:0.8em;">mm</span>
+          </div>
+          
+          <!-- Movement Controls Grid -->
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; grid-template-rows:1fr 1fr 1fr; gap:2px; width:120px;">
+            <div></div>
+            <button id="moveUpBtn" class="movement-btn" onclick="moveRobot('up')" disabled style="font-size:0.7em;">↑</button>
+            <div></div>
+            
+            <button id="moveLeftBtn" class="movement-btn" onclick="moveRobot('left')" disabled style="font-size:0.7em;">←</button>
+            <div></div>
+            <button id="moveRightBtn" class="movement-btn" onclick="moveRobot('right')" disabled style="font-size:0.7em;">→</button>
+            
+            <div></div>
+            <button id="moveDownBtn" class="movement-btn" onclick="moveRobot('down')" disabled style="font-size:0.7em;">↓</button>
+            <div></div>
+          </div>
+        </div>
+        
+        <!-- Row 3: Action Buttons -->
+        <div style="display:flex; gap:4px; justify-content:center; margin-bottom:6px;">
+          <button id="moveForwardBtn" class="movement-btn" onclick="moveRobot('forward')" disabled style="font-size:0.7em;">↗ Forward</button>
+          <button id="moveBackBtn" class="movement-btn" onclick="moveRobot('back')" disabled style="font-size:0.7em;">↙ Back</button>
+          <button id="getPositionBtn" class="movement-btn" onclick="getRobotPosition()" disabled style="font-size:0.7em;">Get Pos</button>
+          <button id="suctionOnBtn" class="movement-btn" onclick="openSuctionModal()" disabled style="font-size:0.7em;">Suct On</button>
+          <button id="suctionOffBtn" class="movement-btn" onclick="suctionOff()" disabled style="font-size:0.7em;">Suct Off</button>
+          <button id="homeBtn" class="movement-btn" onclick="moveToHome()" disabled style="font-size:0.7em;">Home</button>
+        </div>
+        
+        <!-- Row 4: Suction Parameters -->
+        <div style="display:flex; gap:6px; align-items:center; justify-content:center; margin-bottom:6px;">
+          <div style="display:flex; align-items:center; gap:2px;">
+            <label style="color:#4af; font-size:0.7em;">Load:</label>
+            <input type="number" id="suctionLoad" value="1000" min="0" max="2000" class="suction-input">
+          </div>
+          <div style="display:flex; align-items:center; gap:2px;">
+            <label style="color:#4af; font-size:0.7em;">Vacuum:</label>
+            <input type="number" id="suctionVacuum" value="650" min="550" max="750" class="suction-input">
+          </div>
+          <div style="display:flex; align-items:center; gap:2px;">
+            <label style="color:#4af; font-size:0.7em;">Timeout:</label>
+            <input type="number" id="suctionTimeout" value="5.0" min="0.5" max="10" step="0.1" class="suction-input">
+          </div>
+        </div>
+        
+        <!-- Row 5: Stop Button -->
+        <div style="text-align:center;">
+          <button id="robotStopBtn" class="robot-btn robot-btn-gray" onclick="stopRobot()" disabled style="font-size:0.8em;">
+            Stop Robot
+          </button>
+        </div>
+        
+      </div>
+      
+      <!-- Right 20%: Position Display (90% height, centered) -->
+      <div style="width:20%; display:flex; align-items:center;">
+        <div style="width:100%; height:90%; background:#111; border:1px solid #4af; padding:6px; font-family:monospace; font-size:1.2em; line-height:1.3;">
+          <div style="color:#4af; font-weight:bold; margin-bottom:6px; font-size:0.8em; text-align:center;">Robot Position:</div>
+          <div id="positionDisplay" style="color:#ccc;">
+            <div>X: --- mm</div>
+            <div>Y: --- mm</div>
+            <div>Z: --- mm</div>
+            <div>RX: --- °</div>
+            <div>RY: --- °</div>
+            <div>RZ: --- °</div>
+          </div>
+        </div>
+      </div>
+      
     </div>
     
-    <!-- Movement Controls -->
-    <div style="margin-top:2rem;">
-      <div style="text-align:center; margin-bottom:1rem;">
-        <button id="moveUpBtn" class="movement-btn" onclick="moveRobot('up')" disabled>
-          ↑ Up
-        </button>
+    <!-- Bottom 50%: Empty Space (for future features) -->
+    <div style="height:50%; background:#1a1a1a; border:1px solid #333; border-radius:4px; display:flex; align-items:center; justify-content:center;">
+      <div style="color:#666; font-style:italic; font-size:1.2em;">
+        Future Features Area
       </div>
-      
-      <div style="display:flex; justify-content:center; gap:1rem; margin-bottom:1rem;">
-        <button id="moveLeftBtn" class="movement-btn" onclick="moveRobot('left')" disabled>
-          ← Left
-        </button>
-        <button id="moveRightBtn" class="movement-btn" onclick="moveRobot('right')" disabled>
-          → Right
-        </button>
-      </div>
-      
-      <div style="text-align:center; margin-bottom:1rem;">
-        <button id="moveDownBtn" class="movement-btn" onclick="moveRobot('down')" disabled>
-          ↓ Down
-        </button>
-      </div>
-      
-      <div style="display:flex; justify-content:center; gap:1rem;">
-        <button id="moveForwardBtn" class="movement-btn" onclick="moveRobot('forward')" disabled>
-          ↗ Forward
-        </button>
-        <button id="moveBackBtn" class="movement-btn" onclick="moveRobot('back')" disabled>
-          ↙ Back
-        </button>
-      </div>
-    </div>
-    
-    <!-- Stop Button -->
-    <div style="text-align:center; margin-top:2rem;">
-      <button id="robotStopBtn" class="robot-btn robot-btn-gray" onclick="stopRobot()" disabled>
-        Stop Robot
-      </button>
     </div>
   </div>
 
@@ -433,90 +501,100 @@
     }
   }
 
-  // Update robot UI based on status
-  function updateRobotUI(status) {
-    const initBtn = document.getElementById("robotInitBtn");
-    const statusDiv = document.getElementById("robotStatus");
-    const stopBtn = document.getElementById("robotStopBtn");
-    
-    // Update status message
-    statusDiv.textContent = status.message;
-    
-    // Update init button
-    initBtn.className = "robot-btn ";
-    switch (status.state) {
-      case "disconnected":
-        initBtn.className += "robot-btn-red";
-        initBtn.textContent = "Initialize Robot";
-        initBtn.disabled = false;
-        stopBtn.disabled = true;
-        break;
-      case "initializing":
-        initBtn.className += "robot-btn-yellow";
-        initBtn.textContent = "Initializing...";
-        initBtn.disabled = true;
-        stopBtn.disabled = false;
-        break;
-      case "ready":
-        initBtn.className += "robot-btn-green";
-        initBtn.textContent = "Robot Ready";
-        initBtn.disabled = true;
-        stopBtn.disabled = false;
-        break;
-      case "moving":
-        initBtn.className += "robot-btn-green";
-        initBtn.textContent = "Robot Ready";
-        initBtn.disabled = true;
-        stopBtn.disabled = false;
-        break;
-      case "error":
-        initBtn.className += "robot-btn-red";
-        initBtn.textContent = "Error - Retry";
-        initBtn.disabled = false;
-        stopBtn.disabled = false;
-        break;
-    }
-    
-    // Update movement buttons
-    const movementButtons = [
-      "moveUpBtn", "moveDownBtn", "moveLeftBtn", 
-      "moveRightBtn", "moveForwardBtn", "moveBackBtn"
-    ];
-    
-    movementButtons.forEach(btnId => {
-      const btn = document.getElementById(btnId);
-      if (btn) {
-        btn.disabled = !status.buttons_enabled || status.state === "moving";
-        
-        // Remove active state if not moving
-        if (status.state !== "moving") {
-          btn.classList.remove("movement-btn-active");
-        }
-      }
-    });
+// Updated robot status function to show mode
+function updateRobotUI(status) {
+  const initBtn = document.getElementById("robotInitBtn");
+  const interactiveBtn = document.getElementById("robotInteractiveBtn");
+  const statusDiv = document.getElementById("robotStatus");
+  const stopBtn = document.getElementById("robotStopBtn");
+  
+  // Update status message
+  statusDiv.textContent = status.message;
+  
+  // Update init button
+  initBtn.className = "robot-btn ";
+  interactiveBtn.className = "robot-btn ";
+  switch (status.state) {
+    case "disconnected":
+      initBtn.className += "robot-btn-red";
+      initBtn.textContent = "Initialize Robot";
+      initBtn.disabled = false;
+      interactiveBtn.className += "robot-btn-red";
+      interactiveBtn.textContent = "Interactive Mode";
+      interactiveBtn.disabled = false;
+      stopBtn.disabled = true;
+      break;
+    case "initializing":
+      initBtn.className += "robot-btn-yellow";
+      initBtn.textContent = "Initializing...";
+      initBtn.disabled = true;
+      interactiveBtn.className += "robot-btn-yellow";
+      interactiveBtn.textContent = "Initializing...";
+      interactiveBtn.disabled = true;
+      stopBtn.disabled = false;
+      break;
+    case "ready":
+      initBtn.className += "robot-btn-green";
+      initBtn.textContent = "Robot Ready";
+      initBtn.disabled = true;
+      interactiveBtn.className += "robot-btn-green";
+      interactiveBtn.textContent = "Interactive Ready";
+      interactiveBtn.disabled = true;
+      stopBtn.disabled = false;
+      break;
+    case "moving":
+      initBtn.className += "robot-btn-green";
+      initBtn.textContent = "Robot Ready";
+      initBtn.disabled = true;
+      interactiveBtn.className += "robot-btn-green";
+      interactiveBtn.textContent = "Interactive Ready";
+      interactiveBtn.disabled = true;
+      stopBtn.disabled = false;
+      break;
+    case "error":
+      initBtn.className += "robot-btn-red";
+      initBtn.textContent = "Error - Retry";
+      initBtn.disabled = false;
+      interactiveBtn.className += "robot-btn-red";
+      interactiveBtn.textContent = "Error - Retry";
+      interactiveBtn.disabled = false;
+      stopBtn.disabled = false;
+      break;
   }
-
-  // Initialize robot
-  async function initializeRobot() {
-    try {
-      addChatMessage("Max", "Starting robot initialization...");
+  
+  // Update ALL control buttons
+  const controlButtons = [
+    "moveUpBtn", "moveDownBtn", "moveLeftBtn", "moveRightBtn", 
+    "moveForwardBtn", "moveBackBtn", "getPositionBtn", 
+    "suctionOnBtn", "suctionOffBtn", "homeBtn"
+  ];
+  
+  controlButtons.forEach(btnId => {
+    const btn = document.getElementById(btnId);
+    if (btn) {
+      btn.disabled = !status.buttons_enabled || status.state === "moving";
       
-      const resp = await fetch("/robot/initialize", { method: "POST" });
-      if (resp.ok) {
-        console.log("Robot initialization started");
-      } else {
-        const error = await resp.json();
-        addChatMessage("Max", `Robot initialization failed: ${error.error}`);
+      // Remove active state if not moving
+      if (status.state !== "moving") {
+        btn.classList.remove("movement-btn-active");
       }
-    } catch (e) {
-      console.error("Robot initialization error:", e);
-      addChatMessage("Max", `Robot initialization error: ${e.message}`);
     }
-  }
+  });
+}
 
-  // Move robot in specified direction
+  // Enhanced move robot function with custom distance
   async function moveRobot(direction) {
     try {
+      // Get distance from input field
+      const distanceInput = document.getElementById("moveDistance");
+      const distance = parseInt(distanceInput.value) || 20;
+      
+      // Validate distance
+      if (distance < 1 || distance > 500) {
+        addChatMessage("Max", `Invalid distance: ${distance}mm. Must be between 1-500mm.`);
+        return;
+      }
+      
       // Set button to active state
       const btnId = `move${direction.charAt(0).toUpperCase() + direction.slice(1)}Btn`;
       const btn = document.getElementById(btnId);
@@ -524,10 +602,15 @@
         btn.classList.add("movement-btn-active");
       }
       
-      const resp = await fetch(`/robot/move/${direction}`, { method: "POST" });
+      const resp = await fetch(`/robot/move/${direction}`, { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ distance: distance })
+      });
+      
       if (resp.ok) {
-        console.log(`Robot moving ${direction}`);
-        addChatMessage("Max", `Moving robot ${direction} (2cm)`);
+        console.log(`Robot moving ${direction} ${distance}mm`);
+        addChatMessage("Max", `Moving robot ${direction} (${distance}mm)`);
       } else {
         const error = await resp.json();
         addChatMessage("Max", `Robot movement failed: ${error.error}`);
@@ -539,6 +622,222 @@
     } catch (e) {
       console.error("Robot movement error:", e);
       addChatMessage("Max", `Robot movement error: ${e.message}`);
+    }
+  }
+
+  // Get robot position function
+  async function getRobotPosition() {
+    try {
+      addChatMessage("Max", "Getting robot position...");
+      
+      const resp = await fetch("/robot/position", { method: "GET" });
+      if (resp.ok) {
+        const position = await resp.json();
+        updatePositionDisplay(position);
+        addChatMessage("Max", "Robot position updated!");
+      } else {
+        const error = await resp.json();
+        addChatMessage("Max", `Get position failed: ${error.error}`);
+      }
+    } catch (e) {
+      console.error("Get position error:", e);
+      addChatMessage("Max", `Get position error: ${e.message}`);
+    }
+  }
+
+  // Update position display
+  function updatePositionDisplay(position) {
+    const display = document.getElementById("positionDisplay");
+    if (position && position.pos_x !== undefined) {
+      display.innerHTML = `
+        <div>X: ${Math.round(position.pos_x)} mm</div>
+        <div>Y: ${Math.round(position.pos_y)} mm</div>
+        <div>Z: ${Math.round(position.pos_z)} mm</div>
+        <div>RX: ${Math.round(position.rot_x)}°</div>
+        <div>RY: ${Math.round(position.rot_y)}°</div>
+        <div>RZ: ${Math.round(position.rot_z)}°</div>
+      `;
+    } else {
+      display.innerHTML = `
+        <div>X: --- mm</div>
+        <div>Y: --- mm</div>
+        <div>Z: --- mm</div>
+        <div>RX: --- °</div>
+        <div>RY: --- °</div>
+        <div>RZ: --- °</div>
+      `;
+    }
+  }
+
+  // Open suction modal/parameters and execute
+  async function openSuctionModal() {
+    try {
+      // Get values from inputs
+      const load = parseInt(document.getElementById("suctionLoad").value);
+      const vacuum = parseInt(document.getElementById("suctionVacuum").value);
+      const timeout = parseFloat(document.getElementById("suctionTimeout").value);
+      
+      addChatMessage("Max", `Turning suction on with Load: ${load}, Vacuum: ${vacuum}, Timeout: ${timeout}s...`);
+      
+      const resp = await fetch("/robot/suction/on", { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ load: load, vacuum: vacuum, timeout: timeout })
+      });
+      
+      if (resp.ok) {
+        addChatMessage("Max", "Suction activated successfully!");
+      } else {
+        const error = await resp.json();
+        addChatMessage("Max", `Suction on failed: ${error.error}`);
+      }
+    } catch (e) {
+      console.error("Suction on error:", e);
+      addChatMessage("Max", `Suction on error: ${e.message}`);
+    }
+  }
+
+  // Suction off function
+  async function suctionOff() {
+    try {
+      addChatMessage("Max", "Turning suction off...");
+      
+      const resp = await fetch("/robot/suction/off", { method: "POST" });
+      if (resp.ok) {
+        addChatMessage("Max", "Suction deactivated successfully!");
+      } else {
+        const error = await resp.json();
+        addChatMessage("Max", `Suction off failed: ${error.error}`);
+      }
+    } catch (e) {
+      console.error("Suction off error:", e);
+      addChatMessage("Max", `Suction off error: ${e.message}`);
+    }
+  }
+
+  // Move to home function
+  async function moveToHome() {
+    try {
+      addChatMessage("Max", "Moving robot to home position...");
+      
+      const resp = await fetch("/robot/home", { method: "POST" });
+      if (resp.ok) {
+        addChatMessage("Max", "Robot moved to home position successfully!");
+      } else {
+        const error = await resp.json();
+        addChatMessage("Max", `Move to home failed: ${error.error}`);
+      }
+    } catch (e) {
+      console.error("Move to home error:", e);
+      addChatMessage("Max", `Move to home error: ${e.message}`);
+    }
+  }
+
+  // Enhanced input validation for all fields
+  document.addEventListener("DOMContentLoaded", function() {
+    // Distance input validation
+    const distanceInput = document.getElementById("moveDistance");
+    if (distanceInput) {
+      distanceInput.addEventListener("input", function() {
+        let value = parseInt(this.value);
+        if (isNaN(value) || value < 1) {
+          this.value = 1;
+        } else if (value > 500) {
+          this.value = 500;
+        }
+      });
+      
+      distanceInput.addEventListener("blur", function() {
+        if (!this.value) {
+          this.value = 20; // Default back to 20
+        }
+      });
+    }
+
+    // Suction parameter validation
+    const suctionLoad = document.getElementById("suctionLoad");
+    if (suctionLoad) {
+      suctionLoad.addEventListener("input", function() {
+        let value = parseInt(this.value);
+        if (isNaN(value) || value < 0) {
+          this.value = 0;
+        } else if (value > 2000) {
+          this.value = 2000;
+        }
+      });
+    }
+
+    const suctionVacuum = document.getElementById("suctionVacuum");
+    if (suctionVacuum) {
+      suctionVacuum.addEventListener("input", function() {
+        let value = parseInt(this.value);
+        if (isNaN(value) || value < 550) {
+          this.value = 550;
+        } else if (value > 750) {
+          this.value = 750;
+        }
+      });
+    }
+
+    const suctionTimeout = document.getElementById("suctionTimeout");
+    if (suctionTimeout) {
+      suctionTimeout.addEventListener("input", function() {
+        let value = parseFloat(this.value);
+        if (isNaN(value) || value < 0.5) {
+          this.value = 0.5;
+        } else if (value > 10) {
+          this.value = 10;
+        }
+      });
+    }
+  });
+
+  // Initialize robot
+async function initializeRobot() {
+  try {
+    addChatMessage("Max", "Starting robot initialization in standard mode...");
+    
+    const resp = await fetch("/robot/initialize", { 
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ interactive: false })
+    });
+    
+    if (resp.ok) {
+      console.log("Robot standard initialization started");
+    } else {
+      const error = await resp.json();
+      addChatMessage("Max", `Robot initialization failed: ${error.error}`);
+    }
+  } catch (e) {
+    console.error("Robot initialization error:", e);
+    addChatMessage("Max", `Robot initialization error: ${e.message}`);
+  }
+}
+
+  // Initialize robot in interactive mode
+  async function initializeRobotInteractive() {
+    try {
+      addChatMessage("Max", "🎮 Starting Interactive Mode - Opening browser window and enabling manual controls...");
+      
+      const resp = await fetch("/robot/initialize", { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interactive: true })
+      });
+      
+      if (resp.ok) {
+        console.log("Robot interactive initialization started");
+        addChatMessage("Max", "🌐 Browser window should open shortly with Franka Desk interface!");
+        addChatMessage("Max", "🎮 Dashboard movement controls will be enabled once ready.");
+        addChatMessage("Max", "💡 You can use BOTH the browser interface AND the dashboard buttons!");
+      } else {
+        const error = await resp.json();
+        addChatMessage("Max", `Interactive mode failed: ${error.error}`);
+      }
+    } catch (e) {
+      console.error("Interactive mode initialization error:", e);
+      addChatMessage("Max", `Interactive mode error: ${e.message}`);
     }
   }
 
