@@ -155,6 +155,9 @@ class ChromeDriverManager:
         
         if headless:
             options.add_argument("--headless=new")
+            # Set standard size for headless mode
+            options.add_argument("--window-size=1920,1080")
+            options.add_argument("--force-device-scale-factor=1")
         
         # Suppress logs and detection
         options.add_argument("--log-level=3")
@@ -165,6 +168,10 @@ class ChromeDriverManager:
         driver = webdriver.Chrome(service=service, options=options)
         driver.implicitly_wait(1)
         driver.set_page_load_timeout(30)
+        
+        # Set viewport size for headless
+        if headless:
+            driver.set_window_size(1920, 1080)
         
         self.logger.info("✅ Chrome WebDriver created successfully")
         return driver

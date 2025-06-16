@@ -667,18 +667,18 @@
         
       <!-- Row 1: Robot Status Section -->
       <div style="display:flex; gap:8px; align-items:center; justify-content:center; margin-bottom:6px;">
-        <button id="robotInitBtn" class="robot-btn robot-btn-red" onclick="initializeRobot()">
-          Standard Mode
+        <button id="robotInitBtn" class="robot-btn robot-btn-red" onclick="initializeRobot(true)">
+          Initialize (Headless)
         </button>
-        <button id="robotInteractiveBtn" class="robot-btn robot-btn-red" onclick="initializeRobotInteractive()">
-          Interactive Mode
+        <button id="robotInteractiveBtn" class="robot-btn robot-btn-red" onclick="initializeRobot(false)">
+          Initialize (Interactive)
         </button>
       </div>
       <div style="text-align:center; margin-bottom:6px;">
         <div id="robotStatus" style="font-size:0.8em; color:#ccc;">Robot not initialized</div>
         <div style="font-size:0.7em; color:#888; margin-top:2px;">
-          <strong>Interactive:</strong> Opens browser + enables manual controls<br>
-          <strong>Standard:</strong> Headless automation only
+          <strong>Headless:</strong> Dashboard controls only (1920x1080)<br>
+          <strong>Interactive:</strong> Browser window + Dashboard controls
         </div>
       </div>
         
@@ -923,87 +923,6 @@
     }
   }
 
-// Updated robot status function to show mode
-function updateRobotUI(status) {
-  const initBtn = document.getElementById("robotInitBtn");
-  const interactiveBtn = document.getElementById("robotInteractiveBtn");
-  const statusDiv = document.getElementById("robotStatus");
-  const stopBtn = document.getElementById("robotStopBtn");
-  
-  // Update status message
-  statusDiv.textContent = status.message;
-  
-  // Update init button
-  initBtn.className = "robot-btn ";
-  interactiveBtn.className = "robot-btn ";
-  switch (status.state) {
-    case "disconnected":
-      initBtn.className += "robot-btn-red";
-      initBtn.textContent = "Initialize Robot";
-      initBtn.disabled = false;
-      interactiveBtn.className += "robot-btn-red";
-      interactiveBtn.textContent = "Interactive Mode";
-      interactiveBtn.disabled = false;
-      stopBtn.disabled = true;
-      break;
-    case "initializing":
-      initBtn.className += "robot-btn-yellow";
-      initBtn.textContent = "Initializing...";
-      initBtn.disabled = true;
-      interactiveBtn.className += "robot-btn-yellow";
-      interactiveBtn.textContent = "Initializing...";
-      interactiveBtn.disabled = true;
-      stopBtn.disabled = false;
-      break;
-    case "ready":
-      initBtn.className += "robot-btn-green";
-      initBtn.textContent = "Robot Ready";
-      initBtn.disabled = true;
-      interactiveBtn.className += "robot-btn-green";
-      interactiveBtn.textContent = "Interactive Ready";
-      interactiveBtn.disabled = true;
-      stopBtn.disabled = false;
-      break;
-    case "moving":
-      initBtn.className += "robot-btn-green";
-      initBtn.textContent = "Robot Ready";
-      initBtn.disabled = true;
-      interactiveBtn.className += "robot-btn-green";
-      interactiveBtn.textContent = "Interactive Ready";
-      interactiveBtn.disabled = true;
-      stopBtn.disabled = false;
-      break;
-    case "error":
-      initBtn.className += "robot-btn-red";
-      initBtn.textContent = "Error - Retry";
-      initBtn.disabled = false;
-      interactiveBtn.className += "robot-btn-red";
-      interactiveBtn.textContent = "Error - Retry";
-      interactiveBtn.disabled = false;
-      stopBtn.disabled = false;
-      break;
-  }
-  
-  // Update ALL control buttons
-  const controlButtons = [
-    "moveUpBtn", "moveDownBtn", "moveLeftBtn", "moveRightBtn", 
-    "moveForwardBtn", "moveBackBtn", "getPositionBtn", 
-    "suctionOnBtn", "suctionOffBtn", "homeBtn"
-  ];
-  
-  controlButtons.forEach(btnId => {
-    const btn = document.getElementById(btnId);
-    if (btn) {
-      btn.disabled = !status.buttons_enabled || status.state === "moving";
-      
-      // Remove active state if not moving
-      if (status.state !== "moving") {
-        btn.classList.remove("movement-btn-active");
-      }
-    }
-  });
-}
-
   // Enhanced move robot function with custom distance
   async function moveRobot(direction) {
     try {
@@ -1214,54 +1133,120 @@ function updateRobotUI(status) {
     }
   });
 
-  // Initialize robot
-async function initializeRobot() {
-  try {
-    addChatMessage("Max", "Starting robot initialization in standard mode...");
-    
-    const resp = await fetch("/robot/initialize", { 
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ interactive: false })
-    });
-    
-    if (resp.ok) {
-      console.log("Robot standard initialization started");
-    } else {
-      const error = await resp.json();
-      addChatMessage("Max", `Robot initialization failed: ${error.error}`);
-    }
-  } catch (e) {
-    console.error("Robot initialization error:", e);
-    addChatMessage("Max", `Robot initialization error: ${e.message}`);
-  }
-}
-
-  // Initialize robot in interactive mode
-  async function initializeRobotInteractive() {
+  // Initialize robot with headless parameter
+  async function initializeRobot(headless = true) {
     try {
-      addChatMessage("Max", "🎮 Starting Interactive Mode - Opening browser window and enabling manual controls...");
+      const modeText = headless ? "headless" : "interactive";
+      addChatMessage("Max", `🤖 Starting robot initialization in ${modeText} mode...`);
       
       const resp = await fetch("/robot/initialize", { 
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ interactive: true })
+        body: JSON.stringify({ headless: headless })
       });
       
       if (resp.ok) {
-        console.log("Robot interactive initialization started");
-        addChatMessage("Max", "🌐 Browser window should open shortly with Franka Desk interface!");
-        addChatMessage("Max", "🎮 Dashboard movement controls will be enabled once ready.");
-        addChatMessage("Max", "💡 You can use BOTH the browser interface AND the dashboard buttons!");
+        console.log(`Robot ${modeText} initialization started`);
+        if (!headless) {
+          addChatMessage("Max", "🌐 Browser window should open shortly with Franka Desk interface!");
+          addChatMessage("Max", "🎮 Dashboard control buttons will be enabled once ready.");
+          addChatMessage("Max", "💡 You can use BOTH the browser interface AND the dashboard buttons!");
+        } else {
+          addChatMessage("Max", "🤖 Headless mode - 1920x1080 viewport, dashboard controls only");
+        }
       } else {
         const error = await resp.json();
-        addChatMessage("Max", `Interactive mode failed: ${error.error}`);
+        addChatMessage("Max", `Robot initialization failed: ${error.error}`);
       }
     } catch (e) {
-      console.error("Interactive mode initialization error:", e);
-      addChatMessage("Max", `Interactive mode error: ${e.message}`);
+      console.error("Robot initialization error:", e);
+      addChatMessage("Max", `Robot initialization error: ${e.message}`);
     }
   }
+
+  // Updated robot status function to show mode
+  function updateRobotUI(status) {
+    const initBtn = document.getElementById("robotInitBtn");
+    const interactiveBtn = document.getElementById("robotInteractiveBtn");
+    const statusDiv = document.getElementById("robotStatus");
+    const stopBtn = document.getElementById("robotStopBtn");
+    
+    // Update status message
+    statusDiv.textContent = status.message;
+    
+    // Update init buttons
+    initBtn.className = "robot-btn ";
+    interactiveBtn.className = "robot-btn ";
+    
+    switch (status.state) {
+      case "disconnected":
+        initBtn.className += "robot-btn-red";
+        initBtn.textContent = "Initialize (Headless)";
+        initBtn.disabled = false;
+        interactiveBtn.className += "robot-btn-red";
+        interactiveBtn.textContent = "Initialize (Interactive)";
+        interactiveBtn.disabled = false;
+        stopBtn.disabled = true;
+        break;
+      case "initializing":
+        initBtn.className += "robot-btn-yellow";
+        initBtn.textContent = "Initializing...";
+        initBtn.disabled = true;
+        interactiveBtn.className += "robot-btn-yellow";
+        interactiveBtn.textContent = "Initializing...";
+        interactiveBtn.disabled = true;
+        stopBtn.disabled = false;
+        break;
+      case "ready":
+        initBtn.className += "robot-btn-green";
+        initBtn.textContent = "Robot Ready";
+        initBtn.disabled = true;
+        interactiveBtn.className += "robot-btn-green";
+        interactiveBtn.textContent = "Robot Ready";
+        interactiveBtn.disabled = true;
+        stopBtn.disabled = false;
+        break;
+      case "moving":
+        // Keep ready state buttons but show moving status
+        initBtn.className += "robot-btn-green";
+        initBtn.textContent = "Robot Ready";
+        initBtn.disabled = true;
+        interactiveBtn.className += "robot-btn-green";
+        interactiveBtn.textContent = "Robot Ready";
+        interactiveBtn.disabled = true;
+        stopBtn.disabled = false;
+        break;
+      case "error":
+        initBtn.className += "robot-btn-red";
+        initBtn.textContent = "Error - Retry (H)";
+        initBtn.disabled = false;
+        interactiveBtn.className += "robot-btn-red";
+        interactiveBtn.textContent = "Error - Retry (I)";
+        interactiveBtn.disabled = false;
+        stopBtn.disabled = false;
+        break;
+    }
+    
+    // Update ALL control buttons
+    const controlButtons = [
+      "moveUpBtn", "moveDownBtn", "moveLeftBtn", "moveRightBtn", 
+      "moveForwardBtn", "moveBackBtn", "getPositionBtn", 
+      "suctionOnBtn", "suctionOffBtn", "homeBtn"
+    ];
+    
+    controlButtons.forEach(btnId => {
+      const btn = document.getElementById(btnId);
+      if (btn) {
+        btn.disabled = !status.buttons_enabled || status.state === "moving";
+        
+        // Remove active state if not moving
+        if (status.state !== "moving") {
+          btn.classList.remove("movement-btn-active");
+        }
+      }
+    });
+  }
+
 
   // Stop robot
   async function stopRobot() {
@@ -1283,34 +1268,37 @@ async function initializeRobot() {
    * PAGE LOAD
    ****************************************************/
   window.addEventListener("DOMContentLoaded", async () => {
-    // Start robot monitoring
-    startRobotStatusMonitoring();
+      // Start robot monitoring
+      startRobotStatusMonitoring();
 
-    // Fetch camera info to check RealSense availability
-    try {
-      const res = await fetch("/camera_info");
-      const info = await res.json();
-      realsenseAvailable = info.realsense_available;
-      console.log("RealSense available:", realsenseAvailable);
-    } catch (e) {
-      realsenseAvailable = false;
-      console.error("Error checking camera info:", e);
-      logDetailedError(e, "Camera Info Check");
-      addChatMessage("Max", "Error checking RealSense availability. Functionality may be limited.");
-    }
+      // Fetch camera info to check RealSense availability
+      try {
+        const res = await fetch("/camera_info");
+        const info = await res.json();
+        realsenseAvailable = info.realsense_available;
+        console.log("RealSense available:", realsenseAvailable);
+      } catch (e) {
+        realsenseAvailable = false;
+        console.error("Error checking camera info:", e);
+        logDetailedError(e, "Camera Info Check");
+        addChatMessage("Max", "Error checking RealSense availability. Functionality may be limited.");
+      }
 
-    updateDepthDropdown();
+      updateDepthDropdown();
 
-    // Automatically start RealSense for segmentation if available
-    if (realsenseAvailable) {
-      startRealSenseSeg();
-      // Start depth processing with default option
-      depthMode.value = "realsense_rgb_anything";
-      depthTimer = setInterval(() => processDepth(depthMode.value), 500);
-    } else {
-      addChatMessage("Max", "RealSense not detected. Segmentation and Depth will be inactive.");
-    }
-  });
+      // Automatically start RealSense for segmentation if available
+      if (realsenseAvailable) {
+        startRealSenseSeg();
+        // Start depth processing with default option
+        depthMode.value = "realsense_rgb_anything";
+        depthTimer = setInterval(() => processDepth(depthMode.value), 500);
+      } else {
+        addChatMessage("Max", "RealSense not detected. Segmentation and Depth will be inactive.");
+      }
+      
+      // Add welcome message about robot initialization
+      addChatMessage("Max", "🤖 Ready! Use the robot control buttons to initialize in headless or interactive mode.");
+    });
 
   /****************************************************
    * SEGMENTATION - RealSense Only

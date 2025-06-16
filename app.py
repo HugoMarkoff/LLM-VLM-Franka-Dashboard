@@ -17,13 +17,15 @@ import httpx, asyncio
 from utils.sam_handler import SamHandler
 from utils.depth_handler import DepthHandler, RS_OK
 from utils.robopoints_handler import RoboPointsHandler
-import os
+import os, sys
+from pathlib import Path
 from dotenv import load_dotenv
 import json
 
-# Add these imports after your existing imports
-
+sys.path.append(str(Path(__file__).parent))
+from main import FrankaAutomation
 from rutils.config import Config
+from rutils.logger import setup_logging
 from rutils.chrome_manager import ChromeDriverManager
 from rutils.robot_interface import FrankaRobotInterface
 from rutils.robot_commands import FrankaRobotCommands
@@ -97,40 +99,52 @@ POINT_RE = re.compile(r"\(([0-9.+-eE]+)\s*,\s*([0-9.+-eE]+)\)")
 
 # ========== ROBOT CONTROL FUNCTIONS ==========
 
-def initialize_robot_system_interactive():
-    """Initialize robot in TRUE interactive mode - opens browser + enables dashboard controls."""
+# Global robot automation instance - singleton pattern
+robot_automation = None
+robot_status = {
+    "state": "disconnected",  # disconnected, initializing, ready, moving, error
+    "message": "Robot not initialized",
+    "buttons_enabled": False
+}
+robot_lock = threading.Lock()
+
+def initialize_robot_system(headless: bool = True):
+    """Initialize robot using the proven FrankaAutomation class."""
     global robot_automation, robot_status
     
     try:
         with robot_lock:
+            # Prevent multiple instances
+            if robot_automation and hasattr(robot_automation, '_is_initialized') and robot_automation._is_initialized:
+                robot_status["state"] = "error"
+                robot_status["message"] = "Robot already initialized - stop first"
+                robot_status["buttons_enabled"] = False
+                return
+            
             robot_status["state"] = "initializing"
-            robot_status["message"] = "Starting interactive mode (opening browser)..."
-        
-        # Create robot configuration
+            robot_status["message"] = f"Starting {'headless' if headless else 'interactive'} mode..."
+
+        # Create robot configuration - use detected USB interface
         config = Config(
             robot_ip="172.16.0.2",
             local_ip="172.16.0.1", 
-            network_interface="enx34298f970c0c"  # Use detected interface
+            network_interface="enx34298f970c0c"  # This will be auto-detected if not found
         )
         
-        # Initialize logger and managers
-        from rutils.logger import setup_logging
+        # Initialize logger
         logger = setup_logging()
         
-        # Import threading to check current thread
-        import threading
-        current_thread = threading.current_thread()
-        logger.info(f"Starting interactive mode in thread: {current_thread.name}")
+        with robot_lock:
+            robot_status["message"] = "Setting up automation system..."
         
-        # Create the main automation instance
-        from main import FrankaAutomation
+        # Create the main automation instance using proven logic
         automation = FrankaAutomation(config)
         
         with robot_lock:
-            robot_status["message"] = "Opening browser and connecting to robot..."
+            robot_status["message"] = f"{'Opening browser and ' if not headless else ''}connecting to robot..."
         
-        # Start robot in INTERACTIVE mode (NOT headless!)
-        success = automation.start_robot(headless=False, setup_network=True)  # ← headless=False!
+        # Start robot with specified mode
+        success = automation.start_robot(headless=headless, setup_network=True)
         
         if success:
             # Store the automation instance
@@ -138,121 +152,18 @@ def initialize_robot_system_interactive():
             
             with robot_lock:
                 robot_status["state"] = "ready"
-                robot_status["message"] = "Interactive mode ready! Browser open + Dashboard controls active"
+                robot_status["message"] = f"Robot ready! ({'Headless' if headless else 'Interactive + Browser'} mode)"
                 robot_status["buttons_enabled"] = True
             
-            logger.info("[INFO] 🎉 Interactive mode ready!")
-            logger.info("👀 Browser window opened with Franka Desk interface")
-            logger.info("🎮 Dashboard control buttons are now active")
-            logger.info("🔧 You can use BOTH the browser interface AND dashboard buttons")
-            
+            logger.info(f"[INFO] 🎉 Robot ready in {'headless' if headless else 'interactive'} mode!")
+            if not headless:
+                logger.info("👀 Browser window opened with Franka Desk interface")
+                logger.info("🎮 Dashboard control buttons are now active")
+                logger.info("🔧 You can use BOTH the browser interface AND dashboard buttons")
+            else:
+                logger.info("🤖 Headless mode - dashboard controls only")
         else:
-            raise Exception("Interactive mode initialization failed")
-        
-    except Exception as e:
-        with robot_lock:
-            robot_status["state"] = "error"
-            robot_status["message"] = f"Interactive mode error: {str(e)}"
-            robot_status["buttons_enabled"] = False
-        print(f"Interactive mode initialization error: {e}")
-        import traceback
-        traceback.print_exc()
-
-def initialize_robot_system():
-    """Initialize the robot system in standard mode (existing function - keep as is)."""
-    global robot_automation, robot_status
-    
-    try:
-        with robot_lock:
-            robot_status["state"] = "initializing"
-            robot_status["message"] = "Setting up network configuration..."
-        
-        # Create robot configuration
-        config = Config(
-            robot_ip="172.16.0.2",
-            local_ip="172.16.0.1", 
-            network_interface="enp2s0"
-        )
-        
-        # Initialize logger and managers
-        from rutils.logger import setup_logging
-        logger = setup_logging()
-        
-        from rutils.network_manager import NetworkManager
-        from rutils.chrome_manager import ChromeDriverManager
-        
-        network_manager = NetworkManager(config, logger)
-        chrome_manager = ChromeDriverManager(config, logger)
-        
-        with robot_lock:
-            robot_status["message"] = "Configuring network interface..."
-        
-        # Setup network
-        if not network_manager.configure_network():
-            raise Exception("Network configuration failed")
-        
-        with robot_lock:
-            robot_status["message"] = "Testing robot connectivity..."
-            
-        # Test connectivity
-        if not network_manager.test_robot_connectivity():
-            print("[WARNING] Robot connectivity test failed, but continuing...")
-        
-        with robot_lock:
-            robot_status["message"] = "Starting browser and connecting to robot..."
-        
-        # Create browser driver
-        driver = chrome_manager.create_driver(headless=True)
-        
-        # Create robot interface
-        robot_interface = FrankaRobotInterface(driver, config, logger)
-        robot_commands = FrankaRobotCommands(robot_interface, logger)
-        
-        with robot_lock:
-            robot_status["message"] = "Logging into robot interface..."
-        
-        # Initialize robot
-        robot_interface.navigate_and_login()
-        robot_interface.ensure_joints_unlocked()
-        
-        # Store the automation instance
-        class SimpleRobotAutomation:
-            def __init__(self, driver, robot, commands, chrome_manager):
-                self.driver = driver
-                self.robot = robot
-                self.commands = commands
-                self.chrome_manager = chrome_manager
-                self._is_initialized = True
-            
-            def is_robot_ready(self):
-                if not self._is_initialized or not self.driver or not self.robot:
-                    return False
-                try:
-                    _ = self.driver.current_url
-                    return True
-                except:
-                    self._is_initialized = False
-                    return False
-            
-            def stop_robot(self):
-                try:
-                    if self.robot and self.driver:
-                        self.robot.release_control()
-                    if self.driver:
-                        self.driver.quit()
-                    self.chrome_manager.cleanup_all_chrome_processes()
-                except Exception as e:
-                    print(f"Error stopping robot: {e}")
-                self._is_initialized = False
-        
-        robot_automation = SimpleRobotAutomation(driver, robot_interface, robot_commands, chrome_manager)
-        
-        with robot_lock:
-            robot_status["state"] = "ready"
-            robot_status["message"] = "Robot ready for commands"
-            robot_status["buttons_enabled"] = True
-            
-        print("[INFO] Robot initialization completed successfully")
+            raise Exception(f"Robot initialization failed in {'headless' if headless else 'interactive'} mode")
         
     except Exception as e:
         with robot_lock:
@@ -263,21 +174,21 @@ def initialize_robot_system():
         import traceback
         traceback.print_exc()
 
-def execute_robot_movement(direction):
-    """Execute robot movement in specified direction."""
+def execute_robot_movement_with_distance(direction, distance):
+    """Execute robot movement with custom distance."""
     global robot_automation, robot_status
     
     if not robot_automation or not robot_automation.is_robot_ready():
         return False, "Robot not ready"
     
-    # Corrected movement mappings (2cm = 20mm)
+    # Movement mappings with custom distance
     movements = {
-        "up": {"z": -20},      # Up = negative Z (works fine)
-        "down": {"z": 20},     # Down = positive Z (works fine)
-        "left": {"x": -20},    # Left = negative X (was positive Y)
-        "right": {"x": 20},    # Right = positive X (was negative Y)
-        "forward": {"y": -20},  # Forward = positive Y (was positive X)
-        "back": {"y": 20}     # Back = negative Y (was negative X)
+        "up": {"z": -distance},     
+        "down": {"z": distance},    
+        "left": {"x": -distance},   
+        "right": {"x": distance},   
+        "forward": {"y": -distance}, 
+        "back": {"y": distance}     
     }
     
     if direction not in movements:
@@ -286,7 +197,7 @@ def execute_robot_movement(direction):
     try:
         with robot_lock:
             robot_status["state"] = "moving"
-            robot_status["message"] = f"Moving {direction}..."
+            robot_status["message"] = f"Moving {direction} {distance}mm..."
         
         # Execute movement
         move_params = {"x": 0, "y": 0, "z": 0, "speed": 10, "acceleration": 10}
@@ -313,7 +224,7 @@ def execute_robot_movement(direction):
         traceback.print_exc()
         return False, str(e)
 
-####Robot Controll end####
+####Robot Control End####
 
 def _points_from_string(raw: str):
     """
@@ -817,7 +728,7 @@ def broadcast_to_llm_console(token):
 
 @app.route("/robot/initialize", methods=["POST"])
 def robot_initialize():
-    """Initialize the robot system with optional interactive mode."""
+    """Initialize the robot system with headless/interactive mode."""
     global robot_status
     
     with robot_lock:
@@ -825,22 +736,18 @@ def robot_initialize():
             return jsonify({"error": "Robot is busy"}), 400
         
         if robot_status["state"] == "ready":
-            return jsonify({"error": "Robot already initialized"}), 400
+            return jsonify({"error": "Robot already initialized - stop first"}), 400
     
-    # Get interactive mode parameter
+    # Get mode parameter
     data = request.json or {}
-    interactive_mode = data.get("interactive", False)
+    headless = data.get("headless", True)  # Default to headless
     
     # Start initialization in background thread
-    if interactive_mode:
-        init_thread = threading.Thread(target=initialize_robot_system_interactive)
-    else:
-        init_thread = threading.Thread(target=initialize_robot_system)
-    
+    init_thread = threading.Thread(target=initialize_robot_system, args=(headless,))
     init_thread.daemon = True
     init_thread.start()
     
-    mode_text = "interactive mode" if interactive_mode else "standard mode"
+    mode_text = "headless mode" if headless else "interactive mode (browser + dashboard)"
     return jsonify({"status": f"Robot initialization started in {mode_text}"})
 
 @app.route("/robot/status", methods=["GET"])
@@ -912,7 +819,6 @@ def robot_get_position():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Enhanced suction endpoints to handle parameters
 @app.route("/robot/suction/on", methods=["POST"])
 def robot_suction_on():
     """Turn robot suction on with optional parameters."""
