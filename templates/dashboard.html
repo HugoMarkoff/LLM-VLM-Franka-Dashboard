@@ -722,7 +722,7 @@
         <div style="display:flex; gap:6px; align-items:center; justify-content:center; margin-bottom:6px;">
           <div style="display:flex; align-items:center; gap:2px;">
             <label style="color:#4af; font-size:0.7em;">Load:</label>
-            <input type="number" id="suctionLoad" value="1000" min="0" max="2000" class="suction-input">
+            <input type="number" id="suctionLoad" value="100" min="0" max="2000" class="suction-input">
           </div>
           <div style="display:flex; align-items:center; gap:2px;">
             <label style="color:#4af; font-size:0.7em;">Vacuum:</label>
@@ -931,8 +931,8 @@
       const distance = parseInt(distanceInput.value) || 20;
       
       // Validate distance
-      if (distance < 1 || distance > 500) {
-        addChatMessage("Max", `Invalid distance: ${distance}mm. Must be between 1-500mm.`);
+      if (distance < 1 || distance > 700) {
+        addChatMessage("Max", `Invalid distance: ${distance}mm. Must be between 1-700mm.`);
         return;
       }
       
@@ -1083,8 +1083,8 @@
         let value = parseInt(this.value);
         if (isNaN(value) || value < 1) {
           this.value = 1;
-        } else if (value > 500) {
-          this.value = 500;
+        } else if (value > 700) {
+          this.value = 700;
         }
       });
       

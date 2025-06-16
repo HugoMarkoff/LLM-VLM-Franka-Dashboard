@@ -181,9 +181,21 @@ class DepthHandler:
         )
         depth_color = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
         return Image.fromarray(depth_color[..., ::-1])
-
+    
     def calculate_object_info(self, mask_bool: np.ndarray, depth_arr: np.ndarray):
-        import numpy as np, cv2, pyrealsense2 as rs
+        """
+        Calculate object information from mask and depth data.
+        
+        Args:
+            mask_bool: Boolean mask from SAM segmentation
+            depth_arr: Raw depth array from RealSense (uint16, millimeters)
+        
+        Returns:
+            Dict with object geometry information
+        """
+        import numpy as np
+        import cv2
+        import pyrealsense2 as rs
 
         # 1) Align mask to depth resolution
         h_m, w_m = mask_bool.shape
@@ -194,6 +206,7 @@ class DepthHandler:
                 (w_d, h_d),
                 interpolation=cv2.INTER_NEAREST
             ).astype(bool)
+            print(f"[DepthHandler] Resized mask from {mask_bool.shape} to {mask_depth.shape}")
         else:
             mask_depth = mask_bool
 
@@ -206,8 +219,7 @@ class DepthHandler:
 
         print(f"[DepthHandler] Found {len(mask_y_coords)} mask pixels")
 
-        # 3) Calculate CENTER OF MASS of the actual mask pixels (not bounding box!)
-        # This is the true centroid of the segmented object
+        # 3) Calculate CENTER OF MASS of the actual mask pixels
         cx_centroid = float(np.mean(mask_x_coords))
         cy_centroid = float(np.mean(mask_y_coords))
         
@@ -215,7 +227,7 @@ class DepthHandler:
         cx_final = int(round(cx_centroid))
         cy_final = int(round(cy_centroid))
         
-        print(f"[DepthHandler] True mask centroid (center of mass): ({cx_centroid:.2f}, {cy_centroid:.2f})")
+        print(f"[DepthHandler] True mask centroid: ({cx_centroid:.2f}, {cy_centroid:.2f})")
         print(f"[DepthHandler] Rounded to pixel: ({cx_final}, {cy_final})")
         
         # 4) VERIFY this point is actually inside the mask
@@ -228,46 +240,33 @@ class DepthHandler:
             cy_final = int(mask_y_coords[closest_idx])
             print(f"[DepthHandler] Adjusted to closest mask pixel: ({cx_final}, {cy_final})")
         
-        # 5) Final verification
-        if mask_depth[cy_final, cx_final]:
-            print(f"[DepthHandler] ✅ Final center ({cx_final}, {cy_final}) is confirmed inside mask")
-        else:
-            print(f"[DepthHandler] ❌ ERROR: Final center ({cx_final}, {cy_final}) is STILL outside mask!")
-            return None
-
-        # 6) Get depth at the center point
+        # 5) Get depth at the center point with fallback
         center_depth_mm = depth_arr[cy_final, cx_final]
         if center_depth_mm == 0:
             print(f"[DepthHandler] WARNING: No depth at center point, expanding search...")
-            # Expand search around center point
-            for radius in range(1, 10):
-                y_start = max(0, cy_final - radius)
-                y_end = min(h_d, cy_final + radius + 1)
-                x_start = max(0, cx_final - radius)
-                x_end = min(w_d, cx_final + radius + 1)
-                
-                patch = depth_arr[y_start:y_end, x_start:x_end]
-                mask_patch = mask_depth[y_start:y_end, x_start:x_end]
-                
-                # Only consider depths that are also inside the mask
-                valid_depths = patch[mask_patch & (patch > 0)]
-                if len(valid_depths) > 0:
-                    center_depth_mm = int(np.median(valid_depths))
-                    print(f"[DepthHandler] Found depth {center_depth_mm}mm at radius {radius}")
-                    break
+            # Get median depth from all mask pixels
+            mask_depths = depth_arr[mask_depth & (depth_arr > 0)]
+            if len(mask_depths) > 0:
+                center_depth_mm = int(np.median(mask_depths))
+                print(f"[DepthHandler] Using median depth from mask: {center_depth_mm}mm")
+            else:
+                print("[DepthHandler] No valid depth found in mask")
+                return None
         
         z_m = center_depth_mm / 1000.0
         if z_m <= 0:
             print("[DepthHandler] No valid depth found for center point")
             return None
 
-        # 7) Calculate bounding box for size estimation (but NOT for center!)
+        print(f"[DepthHandler] Center depth: {center_depth_mm}mm ({z_m:.3f}m)")
+
+        # 6) Calculate bounding box for size estimation
         x_min, x_max = mask_x_coords.min(), mask_x_coords.max()
         y_min, y_max = mask_y_coords.min(), mask_y_coords.max()
         px_w = x_max - x_min + 1
         px_h = y_max - y_min + 1
 
-        # 8) Try to get oriented bounding box for better size estimation
+        # 7) Get oriented bounding box for better size estimation
         oriented_width_px = px_w
         oriented_height_px = px_h
         angle = 0.0
@@ -279,30 +278,33 @@ class DepthHandler:
                 rect = cv2.minAreaRect(largest_contour)
                 rect_center, (oriented_width_px, oriented_height_px), angle = rect
                 
-                # NOTE: We DO NOT use rect_center for the object center!
-                # We use our calculated center of mass instead!
-                
                 if oriented_width_px > oriented_height_px:
                     oriented_width_px, oriented_height_px = oriented_height_px, oriented_width_px
                     angle += 90
-                print(f"[DepthHandler] Oriented box size: {oriented_width_px:.1f}x{oriented_height_px:.1f}px, angle={angle:.1f}°")
-                print(f"[DepthHandler] BUT using center of mass for 3D position, NOT bounding box center!")
+                print(f"[DepthHandler] Oriented box: {oriented_width_px:.1f}x{oriented_height_px:.1f}px, angle={angle:.1f}°")
         except Exception as e:
             print(f"[DepthHandler] Error computing oriented bounding box: {e}")
 
-        # 9) Compute physical size using oriented dimensions
-        if not self.rs_active:
-            print("[DepthHandler] RealSense not active")
+        # 8) 🔥 CORRECTED: Check if RealSense is active and get COLOR intrinsics
+        if not self.rs_active or not self.rs_pipeline:
+            print("[DepthHandler] RealSense not active, cannot get intrinsics")
             return None
         
-        intr = (
-            self.rs_pipeline
-                .get_active_profile()
-                .get_stream(rs.stream.depth)
-                .as_video_stream_profile()
-                .get_intrinsics()
-        )
-        
+        try:
+            # Get COLOR intrinsics (since depth is aligned to color)
+            intr = (
+                self.rs_pipeline
+                    .get_active_profile()
+                    .get_stream(rs.stream.color)  # ✅ Changed from depth to color
+                    .as_video_stream_profile()
+                    .get_intrinsics()
+            )
+            print(f"[DepthHandler] Color intrinsics - fx:{intr.fx:.1f}, fy:{intr.fy:.1f}, ppx:{intr.ppx:.1f}, ppy:{intr.ppy:.1f}")
+        except Exception as e:
+            print(f"[DepthHandler] Error getting color intrinsics: {e}")
+            return None
+
+        # 9) Compute physical size using color intrinsics
         width_m = (oriented_width_px * z_m) / intr.fx
         height_m = (oriented_height_px * z_m) / intr.fy
 
@@ -323,21 +325,42 @@ class DepthHandler:
         if corrected_angle > 90:
             corrected_angle = 180 - corrected_angle
 
-        # 12) Deproject the TRUE CENTER OF MASS to 3D coordinates
-        center_xyz = rs.rs2_deproject_pixel_to_point(
-            intr, [float(cx_final), float(cy_final)], z_m
-        )
+        # 12) 🔥 CORRECTED: Deproject using color intrinsics
+        try:
+            center_xyz = rs.rs2_deproject_pixel_to_point(
+                intr, [float(cx_final), float(cy_final)], z_m
+            )
+        except Exception as e:
+            print(f"[DepthHandler] Error deprojecting point: {e}")
+            return None
+        
+        # 13) 🔥 COORDINATE FRAME TRANSFORMATION
+        # RealSense coordinate system: X=right, Y=down, Z=forward
+        # Robot coordinate system: X=forward, Y=left, Z=up (adjust as needed)
+        
+        # Option 1: Keep original RealSense coordinates
         center_xyz_mm = [coord * 1000 for coord in center_xyz]
+        
+        # Option 2: Transform to robot coordinates (uncomment if needed)
+        # center_xyz_robot = [
+        #     center_xyz[2],   # Robot X = Camera Z (forward)  
+        #     -center_xyz[0],  # Robot Y = -Camera X (left)
+        #     -center_xyz[1]   # Robot Z = -Camera Y (up)
+        # ]
+        # center_xyz_robot_mm = [coord * 1000 for coord in center_xyz_robot]
+        
         distance_m = float(np.linalg.norm(center_xyz))
 
-        print(f"[DepthHandler] Final result:")
-        print(f"  - Center pixel: ({cx_final}, {cy_final}) [center of mass of mask]")
-        print(f"  - Center 3D: {[round(c) for c in center_xyz_mm]} mm")
-        print(f"  - Size: {round(height_mm)}x{round(width_mm)} mm")
+        print(f"[DepthHandler] Final Results:")
+        print(f"  - Center pixel: ({cx_final}, {cy_final})")
+        print(f"  - Camera coords (X,Y,Z): {[round(c, 1) for c in center_xyz_mm]} mm")
+        print(f"  - Distance: {distance_m:.3f} m")
+        print(f"  - Object size: {round(height_mm)}×{round(width_mm)} mm")
         print(f"  - Orientation: {round(corrected_angle)}°")
 
         return {
-            "center_xyz_mm": center_xyz_mm,
+            "center_xyz_mm": center_xyz_mm,              # Camera coordinates (X=right, Y=down, Z=forward)
+            # "center_xyz_robot_mm": center_xyz_robot_mm,  # Uncomment if using robot coords
             "distance_m": distance_m,
             "width_mm": float(width_mm),      # Shorter dimension
             "length_mm": float(height_mm),    # Longer dimension  
@@ -347,5 +370,11 @@ class DepthHandler:
             "oriented_bbox_px": {
                 "width": float(oriented_width_px),
                 "height": float(oriented_height_px)
+            },
+            "intrinsics": {
+                "fx": intr.fx,
+                "fy": intr.fy,
+                "ppx": intr.ppx,
+                "ppy": intr.ppy
             }
         }
