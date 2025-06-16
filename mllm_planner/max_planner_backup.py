@@ -775,9 +775,9 @@ def step1_vision_analysis(image_path, force_reanalyze=False):
         "STEP 1: List all visible objects (banana, controller, remote, paper, etc.)\n"
         "\n"
         "STEP 2: For each object, determine its ABSOLUTE location in the image using ONLY these terms:\n"
-        "  - top-left, top-centre, top-right\n"
-        "  - centre-left, centre, centre-right\n"
-        "  - bottom-left, bottom-centre, bottom-right\n"
+        "  - top-left, top-center, top-right\n"
+        "  - center-left, center, center-right\n"
+        "  - bottom-left, bottom-center, bottom-right\n"
         "IMPORTANT: Do NOT describe location relative to other objects. Only describe where the object is located in the image itself.\n"
         "Format: - **ObjectName**: location_in_image\n"
         "Example: - **Pen**: top-left (NOT 'top-left of the paper')\n"
@@ -792,7 +792,7 @@ def step1_vision_analysis(image_path, force_reanalyze=False):
          "  - Start with the main/largest object and its image location\n"
          "  - Then describe what other objects are doing in relation to it (on top of, overlapping, next to)\n"
          "  - Focus on the relationships, not individual object positions\n"
-         "Example: 'The paper is in the centre of the image with a USB drive on top of it and a pen overlapping it. The watch is positioned next to the paper.'\n"
+         "Example: 'The paper is in the center of the image with a USB drive on top of it and a pen overlapping it. The watch is positioned next to the paper.'\n"
         "\n"
         "CRITICAL RULES:\n"
         "- If object A is ON TOP OF object B, then B is UNDERNEATH A (not also on top)\n"
@@ -815,7 +815,7 @@ def step1_vision_analysis(image_path, force_reanalyze=False):
 
     end_time = time.time()
     print(f"[INFO] ✅ STEP 1 completed in {end_time - start_time:.1f} seconds")
-    # print(f"[STEP 1 OUTPUT] Raw Vision Analysis:\n{response}")
+    print(f"[STEP 1 OUTPUT] Raw Vision Analysis:\n{response}")
 
     # Extract objects and cache results
     objects_list = extract_objects_from_response(response)
@@ -1427,108 +1427,6 @@ def run_robot_action_planner(task_description, image_path, **kwargs):
     return robot_action_planner(task_description, image_path, **kwargs)
 
 # =============================================================================
-# CALL_PLANNER FUNCTION FOR APP.PY INTEGRATION
-# =============================================================================
-
-def call_planner(current_results, headless=True):
-    """
-    Entry function to be called from app.py with window.current_results data.
-    
-    Args:
-        current_results (dict): Dictionary containing:
-            - user_message: The original user command
-            - imagePath: Path to the image file
-            - objects: List of detected objects with coordinates and actions
-        headless (bool): Run robot execution in headless mode (default: True)
-    
-    Returns:
-        dict: Result dictionary containing:
-            - success: Boolean indicating if planning and execution succeeded
-            - task_description: The input task
-            - image_path: The input image path
-            - action_plan: Generated action plan
-            - execution_success: Boolean indicating if robot execution succeeded
-            - error: Error message if failed
-    """
-    try:
-        print("\n" + "🚀"*20)
-        print("CALLING MAX PLANNER FROM APP.PY")
-        print("🚀"*20)
-        
-        # Extract data from current_results
-        task_description = current_results.get("user_message", "")
-        image_path = current_results.get("imagePath", "")
-        objects_data = current_results.get("objects", [])
-        
-        print(f"[INFO] Task: {task_description}")
-        print(f"[INFO] Image: {image_path}")
-        print(f"[INFO] Objects: {len(objects_data)} objects detected")
-        
-        # Validate inputs
-        if not task_description.strip():
-            return {
-                "success": False,
-                "error": "Task description is empty",
-                "task_description": task_description,
-                "image_path": image_path,
-                "action_plan": "",
-                "execution_success": False
-            }
-        
-        if not image_path or not os.path.exists(image_path):
-            return {
-                "success": False,
-                "error": f"Image file not found: {image_path}",
-                "task_description": task_description,
-                "image_path": image_path,
-                "action_plan": "",
-                "execution_success": False
-            }
-        
-        if not objects_data:
-            return {
-                "success": False,
-                "error": "No objects data provided",
-                "task_description": task_description,
-                "image_path": image_path,
-                "action_plan": "",
-                "execution_success": False
-            }
-        
-        # Convert current_results to JSON format expected by robot_action_planner_json
-        json_input = json.dumps(current_results)
-        
-        print(f"[INFO] Calling robot_action_planner_json with data...")
-        
-        # Call the existing planner function
-        result = robot_action_planner_json(
-            json_input=json_input,
-            output_format="json",
-            force_reanalyze=False,
-            quiet=False,
-            capture_output=False,
-            headless=headless
-        )
-        
-        print(f"[INFO] Planner result: Success={result.get('success')}, Execution={result.get('execution_success')}")
-        
-        return result
-        
-    except Exception as e:
-        print(f"[ERROR] call_planner failed: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        return {
-            "success": False,
-            "error": str(e),
-            "task_description": current_results.get("user_message", ""),
-            "image_path": current_results.get("imagePath", ""),
-            "action_plan": "",
-            "execution_success": False
-        }
-
-# =============================================================================
 # MAIN FUNCTION FOR JSON INPUT
 # =============================================================================
 
@@ -1545,7 +1443,7 @@ def main():
             "objects": [
                 {
                     "action": "pick",
-                    "location": "top-centre",
+                    "location": "top-center",
                     "object": "yellow banana",
                     "object_center_location": {"x": 15, "y": 20, "z": 30},
                     "object_size": {"width": 15, "length": 20},

@@ -19,6 +19,7 @@ from utils.depth_handler import DepthHandler, RS_OK
 from utils.robopoints_handler import RoboPointsHandler
 import os
 from dotenv import load_dotenv
+import json
 
 # Add these imports after your existing imports
 
@@ -790,6 +791,12 @@ def index():
     llm_list = ["ChatGPT", "Llama", "Claude"]
     return render_template("dashboard.html", vlm_options=vlm_list, llm_options=llm_list)
 
+@app.route("/icons/<filename>")
+def serve_icon(filename):
+    """Serve icon files for action plan visualization."""
+    from flask import send_from_directory
+    return send_from_directory('icons', filename)
+
 @app.route("/camera_info", methods=["GET"])
 def camera_info():
     # Get list of connected RealSense devices (if pyrealsense2 is installed)
@@ -1364,6 +1371,235 @@ def process_depth():
 
     else:
         return jsonify({"error": f"Unknown camera_mode: {mode}"}), 400
+
+# ========== MAX PLANNER INTEGRATION ==========
+
+@app.route("/exec_planner", methods=["POST"])
+def exec_planner():
+    """
+    Execute the Max Planner with current_results data from frontend.
+    This function receives the window.current_results and calls the max_planner.
+    """
+    try:
+        data = request.json or {}
+        current_results = data.get("current_results", {})
+        headless = data.get("headless", True)  # Default to headless mode
+        
+        print("\n" + "="*60)
+        print("🤖 EXEC_PLANNER CALLED FROM FRONTEND")
+        print("="*60)
+        print(f"[INFO] Received current_results: {json.dumps(current_results, indent=2)}")
+        print(f"[INFO] Headless mode: {headless}")
+        
+        # Validate input
+        if not current_results:
+            return jsonify({
+                "success": False,
+                "error": "No current_results data provided"
+            }), 400
+        
+        # Import and call the max_planner
+        try:
+            from mllm_planner.max_planner import call_planner
+            print("[INFO] Successfully imported call_planner from max_planner")
+        except ImportError as e:
+            print(f"[ERROR] Failed to import max_planner: {e}")
+            return jsonify({
+                "success": False,
+                "error": f"Failed to import max_planner: {e}"
+            }), 500
+        
+        # Call the planner
+        print("[INFO] Calling max_planner.call_planner()...")
+        result = call_planner(current_results, headless=headless)
+        
+        print(f"[INFO] Max planner result: {result}")
+        
+        # Return the result
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"[ERROR] exec_planner failed: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route("/exec_planner_stream", methods=["POST"])
+def exec_planner_stream():
+    """
+    Streaming version of exec_planner that captures and streams terminal output.
+    """
+    import sys
+    import io
+    import threading
+    import queue
+    from flask import Response, stream_with_context
+    
+    def stream_planner_execution():
+        try:
+            data = request.json or {}
+            current_results = data.get("current_results", {})
+            headless = data.get("headless", True)
+            
+            # Create a queue for streaming output
+            output_queue = queue.Queue()
+            
+            # Custom stdout that captures and queues output
+            class StreamingOutput:
+                def __init__(self, original_stdout, output_queue):
+                    self.original_stdout = original_stdout
+                    self.output_queue = output_queue
+                    self.buffer = ""
+                
+                def write(self, text):
+                    # Write to original stdout
+                    self.original_stdout.write(text)
+                    self.original_stdout.flush()
+                    
+                    # Add to buffer and queue complete lines
+                    self.buffer += text
+                    while '\n' in self.buffer:
+                        line, self.buffer = self.buffer.split('\n', 1)
+                        if line.strip():  # Only queue non-empty lines
+                            # Filter out unwanted messages for planner output
+                            if self._should_include_line(line):
+                                self.output_queue.put(line + '\n')
+                
+                def _should_include_line(self, line):
+                    """Filter out unwanted log messages from planner output."""
+                    # Messages to exclude from planner streaming
+                    exclude_patterns = [
+                        "[Depth] Received =>",
+                        "127.0.0.1 - - [",  # Flask request logs
+                        "POST /process_depth",
+                        "POST /process_realsense_seg",
+                        "GET /robot/status",
+                        "POST /robot/",
+                        "* Running on",
+                        "* Debug mode:",
+                        "WARNING: This is a development server",
+                        "Use a production WSGI server instead",
+                        "[INFO] Fetched fresh frame from RealSense",
+                        "[INFO] RealSense not active",
+                        "[WARNING] No color frame available",
+                        "[WARNING] RealSense frames not ready"
+                    ]
+                    
+                    # Check if line contains any exclude patterns
+                    line_lower = line.lower()
+                    for pattern in exclude_patterns:
+                        if pattern.lower() in line_lower:
+                            return False
+                    
+                    return True
+                
+                def flush(self):
+                    self.original_stdout.flush()
+                    # Queue any remaining buffer content
+                    if self.buffer.strip():
+                        self.output_queue.put(self.buffer)
+                        self.buffer = ""
+            
+            # Set up output capture
+            original_stdout = sys.stdout
+            streaming_output = StreamingOutput(original_stdout, output_queue)
+            
+            # Function to run planner in separate thread
+            def run_planner():
+                try:
+                    sys.stdout = streaming_output
+                    
+                    # Send initial message
+                    print("\n" + "="*60)
+                    print("🤖 EXEC_PLANNER_STREAM STARTED")
+                    print("="*60)
+                    print(f"[INFO] Processing user command: {current_results.get('user_message', 'Unknown')}")
+                    print(f"[INFO] Objects detected: {len(current_results.get('objects', []))}")
+                    print(f"[INFO] Headless mode: {headless}")
+                    
+                    # Validate input
+                    if not current_results:
+                        print("[ERROR] No current_results data provided")
+                        output_queue.put("ERROR: No current_results data provided\n")
+                        return
+                    
+                    # Import and call the max_planner
+                    try:
+                        from mllm_planner.max_planner import call_planner
+                        print("[INFO] Successfully imported call_planner from max_planner")
+                    except ImportError as e:
+                        print(f"[ERROR] Failed to import max_planner: {e}")
+                        output_queue.put(f"ERROR: Failed to import max_planner: {e}\n")
+                        return
+                    
+                    # Call the planner
+                    print("[INFO] Calling max_planner.call_planner()...")
+                    result = call_planner(current_results, headless=headless)
+                    
+                    print(f"[INFO] Max planner completed with success: {result.get('success', False)}")
+                    if result.get('action_plan'):
+                        print(f"[INFO] Generated action plan: {result['action_plan']}")
+                    if result.get('execution_success'):
+                        print("[INFO] ✅ Robot execution completed successfully!")
+                    elif result.get('execution_success') is False:
+                        print("[INFO] ❌ Robot execution failed")
+                    
+                    # Send completion signal
+                    output_queue.put("[PLANNER_COMPLETE]\n")
+                    
+                except Exception as e:
+                    print(f"[ERROR] exec_planner_stream failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    output_queue.put(f"ERROR: {e}\n")
+                    output_queue.put("[PLANNER_COMPLETE]\n")
+                finally:
+                    sys.stdout = original_stdout
+            
+            # Start planner in background thread
+            planner_thread = threading.Thread(target=run_planner)
+            planner_thread.daemon = True
+            planner_thread.start()
+            
+            # Stream output
+            while True:
+                try:
+                    # Get output with timeout
+                    line = output_queue.get(timeout=1.0)
+                    
+                    if line == "[PLANNER_COMPLETE]\n":
+                        yield f"data: [DONE]\n\n"
+                        break
+                    
+                    # Send the line as SSE data
+                    yield f"data: {line.rstrip()}\n\n"
+                    
+                except queue.Empty:
+                    # Check if thread is still alive
+                    if not planner_thread.is_alive():
+                        yield f"data: [DONE]\n\n"
+                        break
+                    # Send heartbeat
+                    yield f"data: \n\n"
+                    continue
+                    
+        except Exception as e:
+            yield f"data: ERROR: {str(e)}\n\n"
+            yield f"data: [DONE]\n\n"
+    
+    return Response(
+        stream_with_context(stream_planner_execution()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*"
+        }
+    )
 
 @app.route("/reset_seg", methods=["POST"])
 def reset_seg():
