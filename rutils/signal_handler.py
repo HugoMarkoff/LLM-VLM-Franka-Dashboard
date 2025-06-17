@@ -32,15 +32,29 @@ class GracefulKiller:
             self.logger.warning(f"Could not set up signal handlers: {e}")
     
     def _signal_handler(self, signum, frame):
-        """Handle shutdown signals."""
+        """Handle shutdown signals quickly."""
         self.logger.info(f"🛑 Received signal {signum}")
         self.kill_now = True
         
         if self.automation:
             try:
-                self.automation.cleanup()
+                # Set a timeout for cleanup
+                import threading
+                cleanup_thread = threading.Thread(target=self.automation.cleanup)
+                cleanup_thread.daemon = True  # Make it a daemon thread
+                cleanup_thread.start()
+                cleanup_thread.join(timeout=3)  # Wait max 3 seconds
+                
+                if cleanup_thread.is_alive():
+                    self.logger.warning("⚠️ Cleanup taking too long, forcing exit")
             except Exception as e:
                 self.logger.error(f"Error during cleanup: {e}")
+        
+        # Force exit
+        import os
+        import sys
+        self.logger.info("🚪 Exiting...")
+        os._exit(0)  # Force immediate exit
     
     def restore_handlers(self):
         """Restore original signal handlers."""

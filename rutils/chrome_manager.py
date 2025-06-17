@@ -189,25 +189,25 @@ class ChromeDriverManager:
                     self.logger.debug(f"Could not remove {lock_file}: {e}")
     
     def cleanup_all_chrome_processes(self) -> None:
-        """Clean up Chrome processes."""
-        self.logger.info("🧹 Cleaning up all Chrome processes...")
+        """Clean up Chrome processes quickly."""
+        self.logger.info("🧹 Cleaning up Chrome processes...")
         
         commands = [
             ["pkill", "-f", "chrome"],
             ["pkill", "-f", "chromium"],
             ["pkill", "-f", "chromedriver"],
-            ["killall", "chrome"],
-            ["killall", "chromium"],
-            ["killall", "chromedriver"],
+            ["killall", "-9", "chrome"],  # Force kill
+            ["killall", "-9", "chromium"],
+            ["killall", "-9", "chromedriver"],
         ]
         
         for cmd in commands:
             try:
-                subprocess.run(cmd, capture_output=True, timeout=3)
+                subprocess.run(cmd, capture_output=True, timeout=1)  # Very short timeout
             except:
                 pass
         
-        # Clean temp directories
+        # Clean temp directories quickly
         import glob
         temp_dirs = glob.glob("/tmp/franka_chrome_*")
         for temp_dir in temp_dirs:
@@ -215,3 +215,5 @@ class ChromeDriverManager:
                 shutil.rmtree(temp_dir)
             except:
                 pass
+        
+        self.logger.debug("✅ Chrome processes cleanup completed")

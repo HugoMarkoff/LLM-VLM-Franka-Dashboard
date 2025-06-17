@@ -992,7 +992,10 @@ def step3_reasoning_refinement(objects_list, relationships_str, task_description
     print("🧠 STEP 3: REASONING REFINEMENT (Using LLM model:deepseek/deepseek-chat-v3-0324:free)")
     print("="*60)
     
-    # Validate JSON consistency if JSON objects provided
+    # DISABLED: Validate JSON consistency if JSON objects provided
+    # Note: Object localization verification disabled as requested
+    # This can be re-enabled in the future if needed
+    """
     if json_objects:
         is_consistent, consistency_issues = validate_object_consistency(objects_list, relationships_str, json_objects)
         if not is_consistent:
@@ -1002,6 +1005,7 @@ def step3_reasoning_refinement(objects_list, relationships_str, task_description
                 print(f"[ERROR]   - {issue}")
             print("[ERROR] 🛑 STOPPING PROGRAM due to inconsistency.")
             return None, None
+    """
     
     # Prepare refinement prompt
     validation_context = ""

@@ -19,7 +19,47 @@ class FrankaRobotCommands:
         self.logger = logger
         self.selenium = robot_interface.selenium
         self.driver = robot_interface.driver
-    
+
+    def ensure_ready_for_command(self, command_name: str, is_config_only: bool = False) -> bool:
+        """Ensure robot is ready for a new command - fast version."""
+        try:
+            # Quick browser check first
+            if not self.selenium.is_browser_responsive():
+                self.logger.error(f"❌ Browser not responsive for {command_name}")
+                return False
+            
+            # Quick Ready check
+            try:
+                page_text = self.driver.find_element(By.TAG_NAME, "body").text
+                if "Ready" in page_text:
+                    return True  # All good!
+            except:
+                pass
+            
+            # Quick task running check
+            execution_button = self.selenium.try_multiple_locators([
+                (By.XPATH, "/html/body/div[2]/section/one-sidebar/div[1]/div/div[2]/footer/section/div/div"),
+                (By.XPATH, "/html/body/div[2]/section/one-sidebar/div[2]/div/div[2]/footer/section/div/div"),
+            ], timeout=1)
+            
+            if execution_button:
+                button_html = execution_button.get_attribute('outerHTML') or ""
+                
+                if ("stop" in button_html.lower() or "cancel" in button_html.lower()):
+                    if is_config_only:
+                        self.logger.warning(f"⏳ Task running - waiting before configuring {command_name}...")
+                    else:
+                        self.logger.warning(f"⏳ Task running - waiting before executing {command_name}...")
+                    
+                    # Use the optimized wait
+                    return self.wait_for_task_completion(timeout=20)
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error checking readiness for {command_name}: {e}")
+            return False
+        
     def wait_for_element(self, locator, timeout=10):
         """Wait for element to be present and return it."""
         try:
@@ -332,62 +372,74 @@ class FrankaRobotCommands:
             return False
 
     def wait_for_task_completion(self, timeout=30) -> bool:
-        """Wait for current task to complete and robot to be truly ready - with error checking."""
+        """Wait for current task to complete - optimized for speed and error handling."""
         self.logger.info("⏳ Waiting for current task to complete...")
         
-        try:
-            # Wait for robot status to show Ready and no task is running
-            for i in range(timeout * 2):  # Check every 0.5 seconds
+        # ADD THIS: Initial delay to let task start
+        time.sleep(0.5)  # Give task time to actually start before checking
+        
+        start_time = time.time()
+        
+        for i in range(timeout * 5):  # Check every 0.2 seconds
+            try:
+                # FASTEST CHECK FIRST: Look for Ready status
                 try:
-                    # Check for task errors during wait (don't wait for them to appear)
+                    page_text = self.driver.find_element(By.TAG_NAME, "body").text
+                    if "Ready" in page_text:
+                        elapsed = time.time() - start_time
+                        self.logger.info(f"✅ Task completed - Robot is ready for next task ({elapsed:.1f}s)")
+                        return True
+                except:
+                    pass
+                
+                # SECOND CHECK: Look for task errors (don't wait for them to appear)
+                if i > 10:  # Only start checking errors after 2 seconds
                     if self.check_for_task_error(wait_for_error=False):
-                        self.logger.warning("🚨 Task error detected during execution - task failed")
-                        return True  # Return True because task "completed" (with error)
-                    
-                    # Check if robot shows Ready status
-                    ready_element = self.driver.find_element(By.XPATH, "//*[contains(text(), 'Ready')]")
-                    
-                    # Check if execution button shows "run" (not "stop")
+                        self.logger.warning("🚨 Task error detected - stopping task")
+                        self.click_stop_button()
+                        return True  # Task "completed" with error
+                
+                # THIRD CHECK: Execution button state (slower)
+                if i % 5 == 0:  # Only check button every 1 second to save time
                     execution_button = self.selenium.try_multiple_locators([
                         (By.CSS_SELECTOR, "body > div:nth-child(2) > section > one-sidebar > div.sidebar-body > div > div.fixed-sections > footer > section > div > div"),
                         (By.XPATH, "/html/body/div[2]/section/one-sidebar/div[1]/div/div[2]/footer/section/div/div"),
-                        (By.XPATH, "/html/body/div[2]/section/one-sidebar/div[2]/div/div[2]/footer/section/div/div"),
                     ], timeout=0.5)
                     
                     if execution_button:
-                        # Check button state more thoroughly
-                        button_classes = execution_button.get_attribute("class") or ""
-                        button_text = execution_button.text.lower()
                         button_html = execution_button.get_attribute('outerHTML') or ""
                         
-                        # If button shows stop indicators, task is still running
-                        if ("stop" in button_classes or "stop" in button_text or 
-                            "stop" in button_html.lower() or "cancel" in button_html.lower()):
-                            if i % 10 == 0:  # Log every 5 seconds
-                                self.logger.info(f"🔄 Task still running... (attempt {i+1}/{timeout*2})")
-                            time.sleep(0.5)
-                            continue
-                        
-                        # If button shows play/run indicators, task is complete
-                        if ("play" in button_html.lower() or "run" in button_html.lower() or
-                            not ("stop" in button_classes and "stop" in button_text)):
-                            self.logger.info("✅ Task completed - Robot is ready for next task")
+                        # If button shows play/run, task is complete
+                        if ("play" in button_html.lower() or "run" in button_html.lower()) and not ("stop" in button_html.lower()):
+                            elapsed = time.time() - start_time
+                            self.logger.info(f"✅ Task completed - Button shows ready ({elapsed:.1f}s)")
                             return True
-                    
-                except:
-                    # If we can't find ready element or button, task might still be running
-                    if i % 10 == 0:  # Log every 5 seconds
-                        self.logger.info(f"🔄 Waiting for task completion... (attempt {i+1}/{timeout*2})")
-                    pass
                 
-                time.sleep(0.5)
+                # Log progress less frequently
+                if i > 0 and i % 25 == 0:  # Every 5 seconds
+                    elapsed = time.time() - start_time
+                    self.logger.info(f"🔄 Still waiting for task completion... ({elapsed:.1f}s)")
+                
+            except Exception as e:
+                # Handle browser crashes/disconnections
+                if "invalid session" in str(e) or "disconnected" in str(e) or "connection" in str(e).lower():
+                    self.logger.error(f"❌ Browser crashed during task wait: {e}")
+                    return False
+                
+                # Other errors, just continue
+                if i % 25 == 0:  # Log occasionally
+                    self.logger.debug(f"Wait error (continuing): {e}")
             
-            self.logger.error(f"❌ Task did not complete within {timeout} seconds")
-            return False
-            
-        except Exception as e:
-            self.logger.error(f"❌ Error waiting for task completion: {e}")
-            return False
+            time.sleep(0.2)  # Check 5 times per second
+        
+        elapsed = time.time() - start_time
+        self.logger.error(f"❌ Task did not complete within {timeout} seconds ({elapsed:.1f}s elapsed)")
+        
+        # Try to stop stuck task
+        self.logger.info("🛑 Attempting to stop stuck task...")
+        self.click_stop_button()
+        
+        return False
 
     def set_axis_offset(self, axis: str, value: float) -> bool:
         """Set offset value for X, Y, or Z axis."""
@@ -496,33 +548,34 @@ class FrankaRobotCommands:
             return False
 
     def check_for_task_error(self, wait_for_error: bool = True) -> bool:
-        """Check if there's a task error displayed and log it. Returns True if error found."""
+        """Check if there's a task error displayed - fast version."""
         try:
+            # Only wait if explicitly requested (after task completion)
             if wait_for_error:
-                # Wait a bit for error messages to appear after task completion
-                import time
-                time.sleep(2)
+                time.sleep(1)  # Reduced from 1.5s to 1s
             
-            # Check for error bar
+            # Quick check for error bar
             error_bar = self.selenium.try_multiple_locators([
                 (By.XPATH, "/html/body/div[2]/section/section/one-error-bar/div"),
                 (By.CSS_SELECTOR, "one-error-bar div"),
-                (By.CSS_SELECTOR, ".error-window"),
-            ], timeout=1)
+            ], timeout=0.5)  # Reduced timeout
             
             if not error_bar:
-                return False  # No error bar found
+                return False
             
-            # Wait a bit more for the error message text to load
-            import time
-            time.sleep(1)
+            # Quick text extraction
+            try:
+                error_text = error_bar.text.strip()
+                if error_text and len(error_text) > 5:
+                    self.logger.error(f"🚨 TASK ERROR: {error_text}")
+                    return True
+            except:
+                pass
             
-            # Look for error message within the error bar
+            # Try specific error message locators quickly
             error_message_locators = [
                 (By.XPATH, ".//div[@data-bind='text: errorMessage']"),
-                (By.XPATH, ".//*[contains(@data-bind, 'errorMessage')]"),
                 (By.XPATH, ".//div[contains(text(), 'Could not')]"),
-                (By.XPATH, ".//div[contains(text(), 'Take:')]"),
                 (By.XPATH, ".//div[contains(text(), 'timeout')]"),
             ]
             
@@ -531,23 +584,12 @@ class FrankaRobotCommands:
                     error_element = error_bar.find_element(*locator)
                     if error_element and error_element.text.strip():
                         error_text = error_element.text.strip()
-                        if error_text and len(error_text) > 5:  # Make sure it's a real message
+                        if error_text and len(error_text) > 5:
                             self.logger.error(f"🚨 TASK ERROR: {error_text}")
                             return True
                 except:
                     continue
             
-            # Try to get any text from the error bar as fallback
-            try:
-                error_bar_text = error_bar.text.strip()
-                if error_bar_text and len(error_bar_text) > 5:
-                    self.logger.error(f"🚨 TASK ERROR: {error_bar_text}")
-                    return True
-            except:
-                pass
-            
-            # If error bar exists but still no readable message after waiting, it might not be an error
-            self.logger.debug("Error bar detected but no readable error message found")
             return False
             
         except Exception as e:
@@ -576,14 +618,17 @@ class FrankaRobotCommands:
                 return False
             
             self.logger.info(f"✅ Activated step {step_number}")
-            import time
-            time.sleep(0.1)
+            
+            # Wait for the field to become active instead of sleep
+            field_xpath = step_paths[step_number] + "/linear-slider/step/div/div[4]/div[1]"
+            self.wait_for_element((By.XPATH, field_xpath), timeout=2)
+            
             return True
             
         except Exception as e:
             self.logger.error(f"❌ Failed to activate step {step_number}: {e}")
             return False
-
+    
     def set_field_value(self, field_path: str, value, field_name: str, step_number: int = 1) -> bool:
         """Generic method to set any field value - handles field activation."""
         self.logger.info(f"📝 Setting {field_name} to: {value}")
@@ -607,11 +652,20 @@ class FrankaRobotCommands:
             
             self.logger.info(f"✅ Successfully clicked {field_name} field")
             
-            # Give the field a moment to become active
-            import time
-            time.sleep(0.1)
+            # SHORT WAIT for field to become editable
+            time.sleep(0.5)
             
-            # Use ActionChains to edit the field
+            # RE-FIND the element after clicking to avoid stale reference
+            try:
+                field_element = self.wait_for_element((By.XPATH, field_path), timeout=5)
+                if not field_element:
+                    self.logger.error(f"❌ {field_name} field not found after click")
+                    return False
+            except:
+                # If we can't refind it, just proceed with key actions
+                pass
+            
+            # Use ActionChains to edit the field (works even if element is stale)
             from selenium.webdriver.common.action_chains import ActionChains
             actions = ActionChains(self.driver)
             
@@ -628,39 +682,58 @@ class FrankaRobotCommands:
             return False
 
     def click_stop_button(self) -> bool:
-        """Click the stop/cancel task button when task fails."""
-        self.logger.info("🛑 Clicking stop button to cancel failed task...")
+        """Click the stop/cancel task button - fast version with error handling."""
+        self.logger.info("🛑 Stopping task...")
         
-        stop_button_locators = [
-            (By.XPATH, "/html/body/div[2]/section/one-sidebar/div[2]/div/div[2]/footer/section/div/div"),
-            (By.XPATH, "/html/body/div[2]/section/one-sidebar/div[1]/div/div[2]/footer/section/div/div"),  # Alternative path
-            (By.CSS_SELECTOR, "one-sidebar footer section div div"),
-            (By.XPATH, "//footer//section//div//div[contains(@class, 'execution-button')]"),
-        ]
-        
-        stop_button = self.selenium.try_multiple_locators(stop_button_locators, timeout=5)
-        if stop_button:
-            if self.selenium.click_element_robust(stop_button):
-                self.logger.info("✅ Stop button clicked - task cancelled")
-                return True
+        try:
+            stop_button_locators = [
+                (By.XPATH, "/html/body/div[2]/section/one-sidebar/div[2]/div/div[2]/footer/section/div/div"),
+                (By.XPATH, "/html/body/div[2]/section/one-sidebar/div[1]/div/div[2]/footer/section/div/div"),
+                (By.CSS_SELECTOR, "one-sidebar footer section div div"),
+            ]
+            
+            stop_button = self.selenium.try_multiple_locators(stop_button_locators, timeout=2)
+            if stop_button:
+                if self.selenium.click_element_robust(stop_button):
+                    self.logger.info("✅ Stop button clicked")
+                    
+                    # Quick wait for stop to take effect
+                    time.sleep(0.5)
+                    
+                    # Verify task stopped
+                    for _ in range(5):  # Check for 1 second
+                        try:
+                            page_text = self.driver.find_element(By.TAG_NAME, "body").text
+                            if "Ready" in page_text:
+                                self.logger.info("✅ Task stopped - Robot ready")
+                                return True
+                        except:
+                            pass
+                        time.sleep(0.2)
+                    
+                    return True
+                else:
+                    self.logger.error("❌ Failed to click stop button")
+                    return False
             else:
-                self.logger.error("❌ Failed to click stop button")
-                return False
-        else:
-            self.logger.warning("⚠️ Stop button not found")
+                self.logger.warning("⚠️ Stop button not found - task may have already stopped")
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"❌ Error stopping task: {e}")
             return False
 
     # ========== HIGH-LEVEL GRIPPER COMMANDS ==========
 
     def configure_gripper_open(self, speed: int = 20) -> bool:
-        """Configure Gripper_open task with specified speed - NO SLEEPS."""
+        """Configure Gripper_open task with specified speed."""
         self.logger.info(f"⚙️ Configuring Gripper_open with speed={speed}")
         
+        # Ensure ready for configuration
+        if not self.ensure_ready_for_command("Gripper_open", is_config_only=True):
+            return False
+        
         try:
-            # 0. Wait for any current task to complete first
-            if not self.wait_for_task_completion(timeout=10):
-                self.logger.warning("⚠️ Previous task still running, waiting...")
-            
             # 1. Select Gripper_open task
             if not self.select_task_from_list("Gripper_open"):
                 return False
@@ -706,11 +779,11 @@ class FrankaRobotCommands:
             self.logger.error(f"❌ Load {load} out of range (10-1000)")
             return False
         
+        # Ensure ready for configuration
+        if not self.ensure_ready_for_command("Gripper_close", is_config_only=True):
+            return False
+        
         try:
-            # 0. Wait for any current task to complete first
-            if not self.wait_for_task_completion(timeout=10):
-                self.logger.warning("⚠️ Previous task still running, waiting...")
-            
             # 1. Select Gripper_close task
             if not self.select_task_from_list("Gripper_close"):
                 return False
@@ -767,6 +840,10 @@ class FrankaRobotCommands:
         """Execute gripper open command."""
         self.logger.info("🔓 Opening gripper...")
         
+        # Ensure ready for execution
+        if not self.ensure_ready_for_command("Gripper_open"):
+            return False
+        
         if not self.select_task_from_list("Gripper_open"):
             return False
         
@@ -776,7 +853,7 @@ class FrankaRobotCommands:
         if not self.click_confirm_button():
             return False
         
-        # Wait for task to actually complete (not just show Ready)
+        # Wait for task to actually complete
         if not self.wait_for_task_completion():
             return False
         
@@ -787,9 +864,9 @@ class FrankaRobotCommands:
         """Execute gripper close command."""
         self.logger.info("🤏 Closing gripper...")
         
-        # First, make sure no task is currently running
-        if not self.wait_for_task_completion(timeout=10):
-            self.logger.warning("⚠️ Previous task still running, waiting...")
+        # Ensure ready for execution
+        if not self.ensure_ready_for_command("Gripper_close"):
+            return False
         
         if not self.select_task_from_list("Gripper_close"):
             return False
@@ -819,11 +896,11 @@ class FrankaRobotCommands:
             self.logger.error(f"❌ Acceleration {acceleration} out of range (5-100%)")
             return False
         
+        # Ensure ready for command
+        if not self.ensure_ready_for_command("Move_robot"):
+            return False
+        
         try:
-            # 0. Wait for any current task to complete
-            if not self.wait_for_task_completion(timeout=10):
-                self.logger.warning("⚠️ Previous task still running, waiting...")
-            
             # 1. Select Move_robot task
             if not self.select_task_from_list("Move_robot"):
                 return False
@@ -832,7 +909,7 @@ class FrankaRobotCommands:
             if not self.click_task_icon_for_config():
                 return False
             
-            # 3. Set ALL X, Y, Z offsets explicitly (including 0 values to clear previous configs)
+            # 3. Set ALL X, Y, Z offsets explicitly
             if not self.set_axis_offset("x", x):
                 return False
             
@@ -848,7 +925,7 @@ class FrankaRobotCommands:
                 self.logger.error("❌ Failed to continue from OFFSET to FRAME")
                 return False
             
-            # 5. Continue from FRAME to SPEED tab (skip frame selection)
+            # 5. Continue from FRAME to SPEED tab
             self.logger.info("🖼️ Continuing from FRAME to SPEED...")
             if not self.click_continue_button():
                 self.logger.error("❌ Failed to continue from FRAME to SPEED")
@@ -898,52 +975,24 @@ class FrankaRobotCommands:
         """Execute suction_off command."""
         self.logger.info("🌪️ Turning off suction...")
         
+        # Ensure ready for execution
+        if not self.ensure_ready_for_command("Suction_off"):
+            return False
+        
         try:
-            # Wait for any current task to complete first
-            if not self.wait_for_task_completion(timeout=10):
-                self.logger.warning("⚠️ Previous task still running, waiting...")
-            
             # 1. Select Suction_off task
             if not self.select_task_from_list("Suction_off"):
                 return False
             
-            # 2. Click the "detach" button in the workspace
-            self.logger.info("🔗 Clicking detach button...")
-            detach_button_path = "/html/body/div[2]/section/section/section/one-timeline/div[3]/div/one-container/div/one-timeline-skill/div/div/div[3]"
-            
-            detach_button = self.wait_for_element((By.XPATH, detach_button_path), timeout=10)
-            if not detach_button:
-                self.logger.error("❌ Detach button not found")
-                return False
-            
-            if not self.selenium.click_element_robust(detach_button):
-                self.logger.error("❌ Failed to click detach button")
-                return False
-            
-            self.logger.info("✅ Detach button clicked")
-            
-            # 3. Click Continue button to proceed through the single configuration page
-            if not self.click_continue_button():
-                self.logger.error("❌ Failed to click Continue button")
-                return False
-            
-            # 4. Execute the task
-            self.logger.info("▶️ Executing suction_off...")
+            # 2. Execute the task directly
             if not self.click_execution_button():
                 return False
             
             if not self.click_confirm_button():
                 return False
             
-            # 5. Wait for task completion
+            # 3. Wait for task completion
             if not self.wait_for_task_completion():
-                return False
-            
-            # 6. Final error check
-            self.logger.info("🔍 Final check for task errors...")
-            if self.check_for_task_error(wait_for_error=True):
-                self.click_stop_button()
-                self.logger.error("❌ Suction_off failed with error")
                 return False
             
             self.logger.info("✅ Suction turned off successfully")
@@ -952,10 +1001,13 @@ class FrankaRobotCommands:
         except Exception as e:
             self.logger.error(f"❌ Failed to turn off suction: {e}")
             return False
-
     
     def suction_on(self, load: int = None, vacuum: int = None, timeout: float = None) -> bool:
         """Execute suction_on command. If parameters provided, configure first."""
+        
+        # Ensure ready for command
+        if not self.ensure_ready_for_command("Suction_on"):
+            return False
         
         # If any parameters provided, configure first
         if load is not None or vacuum is not None or timeout is not None:
@@ -978,10 +1030,6 @@ class FrankaRobotCommands:
             self.logger.info(f"⚙️ Configuring Suction_on with load={load}, vacuum={vacuum}, timeout={timeout}")
             
             try:
-                # Wait for any current task to complete first
-                if not self.wait_for_task_completion(timeout=10):
-                    self.logger.warning("⚠️ Previous task still running, waiting...")
-                
                 # Select Suction_on task
                 if not self.select_task_from_list("Suction_on"):
                     return False
@@ -990,7 +1038,7 @@ class FrankaRobotCommands:
                 if not self.click_task_icon_for_config():
                     return False
                 
-                # Set all three values - note the step numbers!
+                # Set all three values
                 self.logger.info("📝 Setting suction parameters...")
                 
                 # Step 1 (already active)
@@ -1029,43 +1077,35 @@ class FrankaRobotCommands:
         else:
             self.logger.info("🌪️ Executing suction_on with current configuration...")
             
-            # Wait for any current task to complete
-            if not self.wait_for_task_completion(timeout=10):
-                self.logger.warning("⚠️ Previous task still running, waiting...")
-            
             # Just select the task
             if not self.select_task_from_list("Suction_on"):
                 return False
         
-        # Execute the task (same for both configured and non-configured)
+        # Execute the task
         if not self.click_execution_button():
-                return False
+            return False
         
         if not self.click_confirm_button():
             return False
         
-        # Calculate appropriate timeout based on configured timeout
+        # Calculate appropriate timeout
         if load is not None or vacuum is not None or timeout is not None:
-            # If we configured it, use the timeout + buffer
-            wait_timeout = int((timeout if timeout is not None else 5.0) + 15)  # Add 15 second buffer
+            wait_timeout = int((timeout if timeout is not None else 5.0) + 15)
         else:
-            # Use default timeout
             wait_timeout = 30
         
-        # Wait for task completion (now checks for errors during wait)
+        # Wait for task completion
         task_completed = self.wait_for_task_completion(timeout=wait_timeout)
         
-        # Final error check (in case error appeared after completion)
+        # Final error check
         self.logger.info("🔍 Final check for task errors...")
         if self.check_for_task_error(wait_for_error=True):
-            # Stop the failed task
             self.click_stop_button()
             self.logger.error("❌ Suction_on failed with error")
             return False
         
         if not task_completed:
             self.logger.error("❌ Suction_on did not complete properly")
-            # Try to stop if it's still running
             self.click_stop_button()
             return False
         
@@ -1076,11 +1116,11 @@ class FrankaRobotCommands:
         """Get current robot end-effector position and orientation."""
         self.logger.info("📍 Getting current robot position...")
         
+        # Ensure ready (config only - doesn't execute)
+        if not self.ensure_ready_for_command("Where_am_i", is_config_only=True):
+            return None
+        
         try:
-            # 0. Wait for any current task to complete first
-            if not self.wait_for_task_completion(timeout=10):
-                self.logger.warning("⚠️ Previous task still running, waiting...")
-            
             # 1. Select Where_am_i task
             if not self.select_task_from_list("Where_am_i"):
                 return None
@@ -1089,52 +1129,53 @@ class FrankaRobotCommands:
             if not self.click_task_icon_for_config():
                 return None
             
-            # 3. Wait for coordinates to load and extract them
-            import time
-            time.sleep(1)  # Give time for coordinates to load
-            
+            # 3. Wait for coordinates to load
             position_data = {}
             
             try:
-                # Extract position (x, y, z in mm)
+                # Extract position
                 position_xpath = "/html/body/div[2]/section/section/section/one-timeline/div[3]/div/one-container/div/one-timeline-skill/div/one-context-menu/div/div[3]/div[1]/div/step/show-ee-coordinates/div/div[1]/div[1]"
                 position_element = self.wait_for_element((By.XPATH, position_xpath), timeout=10)
                 
                 if position_element:
+                    # Wait for text to populate
+                    WebDriverWait(self.driver, 5).until(
+                        lambda driver: position_element.text.strip() != ""
+                    )
                     position_text = position_element.text.strip()
                     self.logger.info(f"📐 Position text: {position_text}")
                     position_data["position_raw"] = position_text
                     
-                    # Try to parse position values (format might be "X: 123.45 Y: 234.56 Z: 345.67")
+                    # Parse position values
                     import re
                     position_matches = re.findall(r'([XYZ]):\s*(-?\d+\.?\d*)', position_text)
                     if position_matches:
                         for axis, value in position_matches:
                             position_data[f"pos_{axis.lower()}"] = float(value)
-                else:
-                    self.logger.error("❌ Could not find position element")
                 
-                # Extract rotation (rx, ry, rz)
+                # Extract rotation
                 rotation_xpath = "/html/body/div[2]/section/section/section/one-timeline/div[3]/div/one-container/div/one-timeline-skill/div/one-context-menu/div/div[3]/div[1]/div/step/show-ee-coordinates/div/div[1]/div[2]"
-                rotation_element = self.wait_for_element((By.XPATH, rotation_xpath), timeout=10)
+                rotation_element = self.wait_for_element((By.XPATH, rotation_xpath), timeout=5)
                 
                 if rotation_element:
+                    # Wait for text to populate
+                    WebDriverWait(self.driver, 5).until(
+                        lambda driver: rotation_element.text.strip() != ""
+                    )
                     rotation_text = rotation_element.text.strip()
                     self.logger.info(f"🔄 Rotation text: {rotation_text}")
                     position_data["rotation_raw"] = rotation_text
                     
-                    # Try to parse rotation values
+                    # Parse rotation values
                     rotation_matches = re.findall(r'([XYZ]):\s*(-?\d+\.?\d*)', rotation_text)
                     if rotation_matches:
                         for axis, value in rotation_matches:
                             position_data[f"rot_{axis.lower()}"] = float(value)
-                else:
-                    self.logger.error("❌ Could not find rotation element")
                     
             except Exception as e:
                 self.logger.error(f"❌ Error extracting coordinates: {e}")
             
-            # 4. Click Continue button twice to exit
+            # 4. Exit dialog
             self.logger.info("➡️ Exiting position dialog...")
             if not self.click_continue_button():
                 self.logger.error("❌ Failed to click first Continue button")
@@ -1153,11 +1194,11 @@ class FrankaRobotCommands:
         """Move robot to home position using the Where_am_i task."""
         self.logger.info("🏠 Moving robot to home position...")
         
+        # Ensure ready for command
+        if not self.ensure_ready_for_command("Where_am_i/Move_to_home"):
+            return False
+        
         try:
-            # 0. Wait for any current task to complete first
-            if not self.wait_for_task_completion(timeout=10):
-                self.logger.warning("⚠️ Previous task still running, waiting...")
-            
             # 1. Select Where_am_i task
             if not self.select_task_from_list("Where_am_i"):
                 return False
@@ -1166,11 +1207,10 @@ class FrankaRobotCommands:
             if not self.click_task_icon_for_config():
                 return False
             
-            # 3. Wait for interface to load
-            import time
+            # 3. Wait for dialog to fully load
             time.sleep(1)
             
-            # 4. Click "Move to pose" button
+            # 4. Click "Move to pose" button - THIS EXECUTES THE MOVEMENT
             move_to_pose_xpath = "/html/body/div[2]/section/section/section/one-timeline/div[3]/div/one-container/div/one-timeline-skill/div/one-context-menu/div/div[3]/div[1]/div/step/show-ee-coordinates/div/div[2]/div[3]/button"
             
             move_button = self.wait_for_element((By.XPATH, move_to_pose_xpath), timeout=10)
@@ -1182,24 +1222,23 @@ class FrankaRobotCommands:
                 self.logger.error("❌ Failed to click 'Move to pose' button")
                 return False
             
-            self.logger.info("✅ Clicked 'Move to pose' button")
+            self.logger.info("✅ Clicked 'Move to pose' button - movement started")
             
-            # 5. Wait for movement to start/complete (might take a moment)
-            time.sleep(2)
+            # 5. Wait for movement to complete BEFORE closing dialog
+            if not self.wait_for_task_completion(timeout=30):
+                self.logger.error("❌ Home movement did not complete properly")
+                return False
             
-            # 6. Click Continue button twice to exit
-            self.logger.info("➡️ Exiting home position dialog...")
+            # 6. Now exit dialog after movement is done
+            self.logger.info("➡️ Exiting configuration dialog...")
             if not self.click_continue_button():
                 self.logger.error("❌ Failed to click first Continue button")
                 return False
             
+            time.sleep(0.5)
+            
             if not self.click_continue_button():
                 self.logger.error("❌ Failed to click second Continue button")
-                return False
-            
-            # 7. Wait for movement to complete
-            if not self.wait_for_task_completion(timeout=30):
-                self.logger.error("❌ Home movement did not complete properly")
                 return False
             
             self.logger.info("✅ Robot moved to home position successfully")

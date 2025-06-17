@@ -128,3 +128,14 @@ class SeleniumHelper:
             
         except Exception as e:
             self.logger.warning(f"Failed to save debug info: {e}")
+
+    def is_browser_responsive(self) -> bool:
+        """Quick check if browser is responsive."""
+        try:
+            # Very fast check
+            self.driver.current_url
+            return True
+        except Exception as e:
+            if any(keyword in str(e).lower() for keyword in ['invalid session', 'disconnected', 'connection', 'no such window']):
+                return False
+            return True

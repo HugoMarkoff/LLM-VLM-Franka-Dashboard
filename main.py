@@ -55,6 +55,9 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
     def suction_on(load=None, vacuum=None, timeout=None):
         return automation.suction_on(load=load, vacuum=vacuum, timeout=timeout)
     
+    def suction_off():  # ← NEW FUNCTION
+        return automation.suction_off()
+    
     def get_current_pos():
         return automation.get_current_pos()
     
@@ -73,6 +76,7 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
         'close_gripper': close_gripper,
         'move_robot': move_robot,
         'suction_on': suction_on,
+        'suction_off': suction_off,  # ← ADD TO NAMESPACE
         'get_current_pos': get_current_pos,
         'move_to_home': move_to_home,
         'robot_status': robot_status,
@@ -109,7 +113,8 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
     print("  move_to_home()                  # Move to home position")
     print("  config_open(30)                 # Set open speed to 30%")
     print("  move_robot(10, 0, 5)            # Move +10mm X, +5mm Z")
-    print("  suction_on(1500, 700, 8.0)     # Configure and run suction")
+    print("  suction_on(1500, 700, 8.0)      # Configure and run suction")
+    print("  suction_off()                   # Suction off")
     print("  exit()                          # Exit shell")
     print("="*60)
     
@@ -118,6 +123,9 @@ def run_interactive_shell(automation: 'FrankaAutomation'):
         code.interact(local=interactive_locals, banner="")
     except (EOFError, KeyboardInterrupt):
         print("\n🛑 Exiting interactive shell...")
+    finally:
+            # Ensure cleanup happens
+            automation.cleanup()
 
 
 class FrankaAutomation:
@@ -289,8 +297,8 @@ class FrankaAutomation:
             return self.commands.suction_off()
         except Exception as e:
             self.logger.error(f"❌ Suction_off failed: {e}")
-        return False
-    
+            return False
+        
     def keep_alive(self, interactive: bool = False) -> None:
         """Keep the robot session alive until user interrupts."""
         if not self.is_robot_ready():
@@ -305,34 +313,57 @@ class FrankaAutomation:
         self.logger.info("🔄 Robot session active - Press Ctrl+C to exit...")
         try:
             while True:
-                time.sleep(1)
                 if self.killer and self.killer.kill_now:
+                    self.logger.info("🛑 Exit signal received")
                     break
-                # Periodic health check
-                if not self.is_robot_ready():
+                
+                # Quick health check
+                try:
+                    _ = self.driver.current_url
+                except:
                     self.logger.error("❌ Robot session lost")
                     break
+                    
+                time.sleep(0.1)  # Very short sleep for responsive exit
+                
         except KeyboardInterrupt:
             self.logger.info("🛑 User requested exit")
-    
+        except Exception as e:
+            self.logger.error(f"Error in keep_alive: {e}")
+        finally:
+            # Immediate cleanup
+            self.cleanup()
+        
     def cleanup(self) -> None:
-        """Clean up resources."""
+        """Clean up resources quickly and safely."""
+        self.logger.info("🧹 Starting cleanup...")
+        
         if self.robot and self.driver:
             try:
+                # Quick check if browser is still alive before trying to release control
+                self.driver.current_url  # This will throw if browser is dead
                 self.robot.release_control()
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.debug(f"Could not release control (browser likely closed): {e}")
         
         if self.driver:
             try:
+                # Try to quit driver with timeout
                 self.driver.quit()
-            except Exception:
-                pass
-            self.driver = None
+            except Exception as e:
+                self.logger.debug(f"Could not quit driver cleanly: {e}")
+            finally:
+                self.driver = None
         
-        self.chrome_manager.cleanup_all_chrome_processes()
+        # Kill all Chrome processes as backup
+        try:
+            self.chrome_manager.cleanup_all_chrome_processes()
+        except Exception as e:
+            self.logger.debug(f"Chrome cleanup failed: {e}")
+        
         self.robot = None
         self.commands = None
+        self.logger.info("✅ Cleanup completed")
     
     def setup_environment(self, setup_network: bool = True) -> bool:
         """Set up the environment for robot communication."""

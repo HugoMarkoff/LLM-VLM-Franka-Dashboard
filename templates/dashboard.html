@@ -1693,268 +1693,304 @@ segContainer.addEventListener("click", async ev => {
       return false;
   }
 
-  function extractAndProcessAction(buffer) {
+  async function testServerConnection() {
+      try {
+          const resp = await fetch("/camera_info", {
+              method: "GET",
+              signal: AbortSignal.timeout(5000) // 5s timeout
+          });
+          if (resp.ok) {
+              console.log("✅ Server connection OK");
+              return true;
+          } else {
+              throw new Error(`Server returned ${resp.status}`);
+          }
+      } catch (e) {
+          console.error("❌ Server connection failed:", e);
+          addChatMessage("Max", "⚠️ Server connection issues detected. Some features may not work.");
+          return false;
+      }
+  }
+
+  // Update your existing DOMContentLoaded event:
+  window.addEventListener("DOMContentLoaded", async () => {
+      // Test connection first
+      await testServerConnection();
+      
+      // Start robot monitoring
+      startRobotStatusMonitoring();
+      
+      // Rest of your existing initialization code...
+  });
+
+function extractAndProcessAction(buffer) {
     const actionIndex = buffer.indexOf("[ACTION]");
     if (actionIndex === -1) {
-      return { processed: false, remainingBuffer: buffer };
+        return { processed: false, remainingBuffer: buffer };
     }
 
     // Extract content after [ACTION]
     const actionContent = buffer.slice(actionIndex).trim();
     console.log("🔍 Extracted [ACTION] content:", actionContent);
 
-    // Split into lines for parsing
-    const lines = actionContent.split('\n').filter(line => line.trim());
-    console.log("🔍 Lines in [ACTION] block:", lines);
-
-    // If fewer than 2 lines, wait for more content
-    if (lines.length < 2) {
-      console.log("🔍 Partial [ACTION] block, waiting for more content.");
-      return { processed: false, remainingBuffer: buffer };
+    // SIMPLE CHECK: Just look for "RoboPoint Request:" - don't worry about complete parsing here
+    if (!actionContent.includes("RoboPoint Request:")) {
+        console.log("🔍 Incomplete [ACTION] block, waiting for more content.");
+        return { processed: false, remainingBuffer: buffer };
     }
 
-    // Find the required lines - more flexible matching
-    let roboPointLine = null;
-    let actionLine = null;
-
-    for (const line of lines) {
-        // More flexible regex that handles "[ACTION]RoboPoint Request:" format
-        if (!roboPointLine && /RoboPoint\s*Request\s*:/i.test(line)) {
-            roboPointLine = line;
-            console.log("✅ Found RoboPoint line:", line);
-        } else if (!actionLine && /Action\s*Request\s*:/i.test(line)) {
-            actionLine = line;
-            console.log("✅ Found Action line:", line);
-        }
-    }
-
-    // Better handling of combined lines
-    if (!roboPointLine || !actionLine) {
-        // Try to split a single combined line
-        for (const line of lines) {
-            if (line.includes("RoboPoint Request:") && line.includes("Action Request:")) {
-                const parts = line.split(/Action\s*Request\s*:/i);
-                if (parts.length === 2) {
-                    roboPointLine = parts[0].trim();
-                    actionLine = "Action Request:" + parts[1].trim();
-                    console.log("✅ Split combined line:", { roboPointLine, actionLine });
-                    break;
-                }
-            }
-        }
-    }
-    
-    if (!actionLine) {
-      for (const line of lines) {
-        if (line.toLowerCase().includes("action") || line.toLowerCase().includes("pick") || line.toLowerCase().includes("place")) {
-          actionLine = line;
-          console.log("✅ Found Action line (keyword match):", line);
-          break;
-        }
-      }
-    }
-
-    // If still not found, report error but log full content for debugging
-    if (!roboPointLine) {
-      console.log("❌ Could not find RoboPoint Request line in:", lines);
-      addChatMessage("Max", `Error: Missing 'RoboPoint Request:' line. Full response logged for debugging.`);
-      addChatMessage("Max", `Debug content: ${actionContent.length > 200 ? actionContent.substring(0, 200) + '...' : actionContent}`);
-      return { processed: false, remainingBuffer: buffer };
-    }
-
-    if (!actionLine) {
-      console.log("❌ Could not find Action Request line in:", lines);
-      addChatMessage("Max", `Error: Missing 'Action Request:' line. Full response logged for debugging.`);
-      addChatMessage("Max", `Debug content: ${actionContent.length > 200 ? actionContent.substring(0, 200) + '...' : actionContent}`);
-      return { processed: false, remainingBuffer: buffer };
-    }
-
-    // Process the action
     console.log("✅ Complete [ACTION] block found, processing...");
     addChatMessage("Max", "🤖 Processing action request... Searching for objects.");
+    
+    // Call the bulletproof parser directly
     executeMultiStepActions(actionContent);
 
     const remainingBuffer = buffer.slice(actionIndex + actionContent.length).trim();
     return { processed: true, remainingBuffer };
-  }
+}
 
   async function tryFallbackChat(userText) {
-    try {
-      addChatMessage("Max", "Processing your request...");
-      console.log("📤 Attempting fetch to /chat");
-      const resp = await fetch("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: userText })
-      });
+      for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+              addChatMessage("Max", `Processing your request... (attempt ${attempt}/3)`);
+              console.log(`📤 Fallback attempt ${attempt} to /chat`);
+              
+              const resp = await fetch("/chat", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ text: userText }),
+                  signal: AbortSignal.timeout(30000) // 30s timeout
+              });
 
-      if (!resp.ok) {
-        const errorInfo = await getDetailedErrorInfo(resp, "Chat Fallback");
-        console.error("Fallback error details:", errorInfo);
-        throw new Error(`Server error: ${formatErrorForUser(errorInfo)}`);
+              if (!resp.ok) {
+                  const errorText = await resp.text();
+                  throw new Error(`HTTP ${resp.status}: ${errorText.substring(0, 100)}`);
+              }
+
+              const data = await resp.json();
+              console.log("🔍 Fallback response:", data);
+
+              const response = data.reply || data.answer || "";
+              if (response) {
+                  if (response.includes("[ACTION]")) {
+                      console.log("✅ [ACTION] detected in fallback response, processing...");
+                      addChatMessage("Max", "🤖 Processing action request... Searching for objects.");
+                      await executeMultiStepActions(response);
+                  } else {
+                      console.log("✅ No action in fallback, showing regular response.");
+                      addChatMessage("Max", response);
+                  }
+                  return; // Success, exit
+              } else {
+                  throw new Error("Empty response from server");
+              }
+              
+          } catch (error) {
+              console.error(`❌ Fallback attempt ${attempt} failed:`, error);
+              
+              if (attempt === 3) {
+                  // Final attempt failed
+                  addChatMessage("Max", `❌ All connection attempts failed. Issues detected:
+  • Network: ${error.message}
+  • Try: Refresh page or check server status`);
+                  return;
+              }
+              
+              // Wait before retry (progressive backoff)
+              await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+              addChatMessage("Max", `🔄 Retrying connection... (${attempt}/3)`);
+          }
       }
-
-      const data = await resp.json();
-      console.log("🔍 Fallback response:", data);
-
-      const response = data.reply || data.answer || "";
-      if (response) {
-        if (response.includes("[ACTION]")) {
-          console.log("✅ [ACTION] detected in fallback response, processing...");
-          addChatMessage("Max", "🤖 Processing action request... Searching for objects.");
-          await executeMultiStepActions(response);
-        } else {
-          console.log("✅ No action in fallback, showing regular response.");
-          addChatMessage("Max", response);
-        }
-      } else {
-        addChatMessage("Max", "No response received from fallback.");
-      }
-    } catch (error) {
-      console.error("❌ Fallback error:", error);
-      logDetailedError(error, "Chat Fallback");
-      addChatMessage("Max", `Fallback error: ${error.message}`);
-    }
   }
 
-  async function executeMultiStepActions(actionBlock) {
-      console.log("🔍 DEBUG: Raw action block:", actionBlock);
+function validateAndFixActions(objects, actions) {
+    console.log("🔧 Validating actions - Objects:", objects, "Actions:", actions);
+    
+    // Common fixes for malformed actions
+    const fixedActions = actions.map(action => {
+        action = action.toLowerCase().trim();
+        
+        // Fix common malformations
+        if (action.includes("pick") && action.includes("place")) {
+            return ["pick", "place"]; // Split combined action
+        } else if (action.includes("pick")) {
+            return "pick";
+        } else if (action.includes("place") || action.includes("put")) {
+            return "place";
+        }
+        return action;
+    }).flat(); // Flatten in case we split any actions
+    
+    // If we have 2 objects but 1 action, default to pick + place
+    if (objects.length === 2 && fixedActions.length === 1) {
+        return ["pick", "place"];
+    }
+    
+    return fixedActions;
+}
 
-      // Clear previous results
-      window.robopoint_results = [];
-      window.current_results = {
-          user_message: window.current_user_message || "Unknown command",
-          imagePath: "Unknown path",  // Will be updated with actual path
-          objects: []
-      };
+async function executeMultiStepActions(actionBlock) {
+    console.log("🔍 DEBUG: Raw action block:", actionBlock);
+
+    window.robopoint_results = [];
+    window.current_results = {
+        user_message: window.current_user_message || "Unknown command",
+        imagePath: "Unknown path",
+        objects: []
+    };
 
     try {
-        // Extract [ACTION] block content
-        const actionMatch = actionBlock.match(/\[ACTION\]\s*([\s\S]*?)(?:\n\n|$)/i);
-        if (!actionMatch) {
-            throw new Error("Could not find [ACTION] block in response");
+        // BULLETPROOF EXTRACTION
+        let content = actionBlock.replace(/\[ACTION\]/i, '').trim();
+        console.log("🔍 Raw content:", content);
+
+        // ENHANCED FIX: Handle various malformed patterns
+        content = content.replace(/([a-zA-Z\s])Action\s*Request:/g, '$1\nAction Request:');
+        content = content.replace(/([a-zA-Z\s])Action:/g, '$1\nAction Request:');
+        content = content.replace(/Request:\s*([^;]+);([^A])/, 'Request: $1; $2'); // Fix missing spaces
+        console.log("🔍 Fixed content:", content);
+
+        // Extract RoboPoint content - everything before first "Action Request"
+        const roboPointRegex = /RoboPoint\s*Request:\s*([^]*?)(?=\n\s*Action\s*Request:|$)/i;
+        const roboPointMatch = content.match(roboPointRegex);
+        
+        if (!roboPointMatch) {
+            addChatMessage("Max", "Error: Could not find RoboPoint Request");
+            return;
         }
 
-        const content = actionMatch[1].trim();
-        console.log("🔍 DEBUG: Action content:", content);
+        let roboPointContent = roboPointMatch[1].trim();
+        
+        // ENHANCED CLEANING: Remove trailing "Action" artifacts
+        roboPointContent = roboPointContent.replace(/\s*Action\s*$/i, '').trim();
+        roboPointContent = roboPointContent.replace(/\s*Request\s*$/i, '').trim();
+        console.log("🔍 Cleaned RoboPoint content:", roboPointContent);
 
-        // Split into lines, handle single line with both requests
-        let lines = content.split('\n').map(line => line.trim()).filter(line => line);
-        if (lines.length === 1 && lines[0].includes("Action Request:")) {
-            const idx = lines[0].indexOf("Action Request:");
-            lines = [
-                lines[0].slice(0, idx).trim(),
-                lines[0].slice(idx).trim()
-            ];
+        // SMART OBJECT EXTRACTION - preserve complete descriptions
+        let objects = [];
+        if (roboPointContent.includes(';')) {
+            // Multiple objects separated by semicolons - preserve each complete description
+            objects = roboPointContent
+                .split(';')
+                .map(s => s.trim())
+                .filter(s => s && s.length > 0);
+        } else {
+            // Single object - keep it whole
+            objects = [roboPointContent];
         }
-        console.log("🔍 DEBUG: All lines:", lines);
 
-        let roboPointLine = null;
-        let actionLines = [];  // ✅ Changed to array to collect multiple action lines
+        // LOCATION VALIDATION - check if locations were incorrectly split
+        const fixedObjects = [];
+        for (let i = 0; i < objects.length; i++) {
+            const obj = objects[i];
+            const nextObj = objects[i + 1];
+            
+            // Check if next "object" is actually a location descriptor
+            if (nextObj && isLocationDescriptor(nextObj)) {
+                // Combine object with its location
+                fixedObjects.push(`${obj} ${nextObj}`);
+                i++; // Skip the next object since we combined it
+                console.log(`🔧 Combined "${obj}" with location "${nextObj}"`);
+            } else {
+                fixedObjects.push(obj);
+            }
+        }
+        
+        objects = fixedObjects;
 
-        for (const line of lines) {
-            if (line.match(/^\s*RoboPoint\s+Request\s*:/i)) {
-                roboPointLine = line;
-                console.log("✅ Found RoboPoint line:", line);
-            } else if (line.match(/^\s*Action\s+Request\s*:/i)) {
-                actionLines.push(line);  // ✅ Collect all action lines
-                console.log("✅ Found Action line:", line);
+        // Extract actions (look for Action Request patterns)
+        const actionRegex = /Action\s*Request:\s*(\w+)/gi;
+        const actionMatches = [...content.matchAll(actionRegex)];
+        
+        let actions = actionMatches
+            .map(match => match[1] ? match[1].trim() : "")
+            .filter(s => s && s.length > 0);
+
+        console.log("🔍 Raw objects:", objects);
+        console.log("🔍 Raw actions:", actions);
+
+        // SMART DEFAULTS: Auto-generate actions if missing
+        if (actions.length === 0) {
+            if (objects.length >= 2) {
+                actions = ['Pick', 'Place'];
+                console.log("🔧 Auto-generated Pick/Place for 2+ objects");
+            } else if (objects.length === 1) {
+                actions = ['Pick'];
+                console.log("🔧 Auto-generated Pick for 1 object");
             }
         }
 
-        // Detailed error reporting
-        if (!roboPointLine) {
-            console.log("❌ Available lines:", lines);
-            addChatMessage("Max", `Error: Missing 'RoboPoint Request:' line.`);
-            return;
-        }
-
-        if (actionLines.length === 0) {  // ✅ Check if we have any action lines
-            console.log("❌ Available lines:", lines);
-            addChatMessage("Max", `Error: Missing 'Action Request:' line.`);
-            return;
-        }
-
-        // Extract content after colons
-        const roboPointContent = roboPointLine.split(':', 2)[1];
-
-        // ✅ Combine all action lines and parse them
-        let allActionContent = "";
-        if (actionLines.length === 1) {
-            // Single line: might be "Pick; Place" or just "Pick"
-            allActionContent = actionLines[0].split(':', 2)[1];
-        } else {
-            // Multiple lines: combine them with semicolons
-            const actionParts = actionLines.map(line => line.split(':', 2)[1].trim());
-            allActionContent = actionParts.join('; ');
-        }
-
-        if (!roboPointContent || !allActionContent) {
-            addChatMessage("Max", "Error: Could not extract content from request/action lines");
-            return;
-        }
-
-        // Parse the semicolon-separated values
-        const objects = roboPointContent.split(';').map(s => s.trim()).filter(s => s);
-        const actions = allActionContent.split(';').map(s => s.trim()).filter(s => s);
-
-        console.log("🔍 DEBUG: Parsed objects:", objects);
-        console.log("🔍 DEBUG: Parsed actions:", actions);
-
+        // INTELLIGENT MATCHING: Handle mismatched objects/actions
         if (objects.length !== actions.length) {
-            addChatMessage("Max", `Error: Mismatch between objects (${objects.length}) and actions (${actions.length}).`);
-            return;
+            if (objects.length === 2 && actions.length === 1) {
+                actions = ['Pick', 'Place'];
+                console.log("🔧 Expanded to Pick/Place for 2 objects");
+            } else if (objects.length === 1 && actions.length === 0) {
+                actions = ['Pick'];
+                console.log("🔧 Added Pick action for single object");  
+            } else {
+                // Match to minimum length
+                const minLength = Math.min(objects.length, actions.length);
+                if (minLength > 0) {
+                    objects = objects.slice(0, minLength);
+                    actions = actions.slice(0, minLength);
+                    console.log("🔧 Matched objects/actions to minimum length");
+                }
+            }
         }
+
+        console.log("🔍 FINAL - Objects:", objects);
+        console.log("🔍 FINAL - Actions:", actions);
 
         if (objects.length === 0) {
-            addChatMessage("Max", "Error: No valid commands found in the action block");
+            addChatMessage("Max", "Error: No valid objects found after parsing");
             return;
         }
 
-        // Success - start processing
-        addChatMessage("Max", `✅ Found ${objects.length} command(s). Starting execution...`);
+        // VALIDATION: Check for complete object descriptions
+        for (const obj of objects) {
+            if (obj.length < 2) {
+                console.warn("⚠️ Suspicious short object:", obj);
+            }
+        }
 
-        // Unfreeze segmentation window to ensure fresh frames for RoboPoint actions
+        // SUCCESS - show what we parsed
+        addChatMessage("Max", `✅ Parsed: ${objects.map((obj, i) => `${actions[i]} "${obj}"`).join(', ')}`);
+
+        // Continue with execution...
         unfreezeSegWindow();
-
-        // Wait briefly to ensure a fresh frame is fetched
         await new Promise(resolve => setTimeout(resolve, 300));
 
-        // Capture frame
         let frameB64 = "";
         try {
             frameB64 = await captureSegFrame();
             freezeSegWindow(frameB64);
         } catch (e) {
             console.warn("No seg frame:", e);
-            addChatMessage("Max", "Warning: Could not capture frame. Continuing anyway...");
+            addChatMessage("Max", "Warning: Could not capture frame. Continuing...");
         }
 
         // Execute each command
-for (let i = 0; i < objects.length; i++) {
+        for (let i = 0; i < objects.length; i++) {
             const object = objects[i];
             const action = actions[i];
 
-            addChatMessage("Max", `🔄 Step ${i+1}: Finding "${object}"...`);
+            addChatMessage("Max", `🔄 Step ${i+1}: ${action} "${object}"`);
 
             try {
                 const result = await executeRoboPointCommand(object, action, frameB64);
 
-                // Update image path with the actual saved path from the first result
                 if (i === 0 && result.image_path) {
                     window.current_results.imagePath = result.image_path;
-                    console.log(`📁 Updated image path: ${result.image_path}`);
                 }
 
                 if (result.seg_frame) {
                     segImg.src = "data:image/jpeg;base64," + result.seg_frame;
-                    console.log("Updated image with RoboPoint results. State after: segFrozen=" + segFrozen + ", isSegmenting=" + isSegmenting);
                 }
 
-                // Collect result in the desired format
                 if (result.object_info && result.object_info.center_xyz_mm) {
                     const info = result.object_info;
-                    const objectResult = {
+                    window.current_results.objects.push({
                         action: action.toLowerCase(),
                         location: result.placement || "unknown",
                         object: object,
@@ -1968,109 +2004,168 @@ for (let i = 0; i < objects.length; i++) {
                             length: Math.round(info.length_mm)
                         },
                         object_orientation: Math.round(info.orientation_deg)
-                    };
+                    });
                     
-                    window.current_results.objects.push(objectResult);
-                    
-                    addChatMessage("Max", 
-                        `✅ Step ${i+1}: Successfully found "${object}"! Location: ${info.center_xyz_mm.map(v=>Math.round(v)).join(', ')} mm, Distance: ${info.distance_m.toFixed(3)} m, Size: ${Math.round(info.length_mm)}×${Math.round(info.width_mm)} mm, Orientation: ${Math.round(info.orientation_deg)}°`
-                    );
+                    addChatMessage("Max", `✅ Found "${object}" at ${info.center_xyz_mm.map(v=>Math.round(v)).join(', ')} mm`);
                 } else {
-                    // Add result even without detailed info
-                    const objectResult = {
+                    window.current_results.objects.push({
                         action: action.toLowerCase(),
                         location: result.placement || "unknown",
                         object: object,
                         object_center_location: { x: 0, y: 0, z: 0 },
                         object_size: { width: 0, length: 0 },
                         object_orientation: 0
-                    };
-                    window.current_results.objects.push(objectResult);
-                    addChatMessage("Max", `✅ Step ${i+1}: Successfully found "${object}"`);
+                    });
+                    addChatMessage("Max", `✅ Found "${object}"`);
                 }
 
-                // Pause between steps
-                if (i < objects.length - 1) {
-                    await new Promise(resolve => setTimeout(resolve, 800));
-                }
-            } catch (error) {
-                console.error(`❌ Step ${i+1} failed:`, error);
-                addChatMessage("Max", `❌ Step ${i+1} Failed: ${error.message}`);
-                break;
-            }
-        }
+          if (i < objects.length - 1) {
+                      addChatMessage("Max", `⏳ Waiting for RoboPoint service...`);
+                      await new Promise(resolve => setTimeout(resolve, 3000)); // Increased from 800ms to 3s
+                  }
+              } catch (error) {
+                  console.error(`❌ Step ${i+1} failed:`, error);
+                  addChatMessage("Max", `❌ Step ${i+1} failed: ${error.message}`);
+                  break;
+              }
+          }
 
-        // Print final results to console
-        console.log("🤖 ROBOPOINT RESULTS:");
-        console.log("=".repeat(50));
-        console.log(JSON.stringify(window.current_results, null, 2));
-        console.log("=".repeat(50));
-
-        addChatMessage("Max", `🎉 Completed ${objects.length} action(s)!`);
+        console.log("🤖 FINAL RESULTS:", JSON.stringify(window.current_results, null, 2));
+        addChatMessage("Max", `🎉 Completed ${objects.length} step(s)!`);
         
-        // Call exec_planner with streaming output to LLM Reasoning panel
-        addChatMessage("Max", "🚀 Sending results to Max Planner for robot execution...");
+        addChatMessage("Max", "🚀 Sending to Max Planner...");
         try {
             await callExecPlannerStream(window.current_results);
         } catch (error) {
-            console.error("❌ Failed to call exec_planner_stream:", error);
-            addChatMessage("Max", `❌ Failed to call Max Planner: ${error.message}`);
+            console.error("❌ Planner failed:", error);
+            addChatMessage("Max", `❌ Planner failed: ${error.message}`);
         }
         
-        // Keep the segmentation window frozen to show results
-        console.log("Keeping segmentation window frozen to show results. Click or send a new message to unfreeze. State: segFrozen=" + segFrozen + ", isSegmenting=" + isSegmenting + ", Timer: " + (realsenseSegTimer ? "Active" : "Cleared"));
     } catch (error) {
         console.error("❌ Action parsing error:", error);
-        logDetailedError(error, "Action Parsing");
-        addChatMessage("Max", `Action parsing error: ${error.message}`);
+        addChatMessage("Max", `Parsing error: ${error.message}`);
         unfreezeSegWindow();
     }
 }
 
-  async function executeRoboPointCommand(objectDescription, action, frameB64, retries = 2) {
-      const singleActionBlock = `[ACTION]\nRoboPoint Request: ${objectDescription}\nAction Request: ${action}`;
-      
-      for (let attempt = 1; attempt <= retries; attempt++) {
-          console.log(`📤 Attempt ${attempt}: Sending to RoboPoint:`, singleActionBlock);
-          
-          try {
-              const resp = await fetch("/exec_action", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                      action_block: singleActionBlock,
-                      seg_frame: frameB64
-                  }),
-                  timeout: 90000 // 90 second timeout
-              });
+// Helper function to identify location descriptors
+function isLocationDescriptor(text) {
+    const locationWords = [
+        'middle', 'center', 'centre',
+        'top', 'bottom', 'left', 'right',
+        'upper', 'lower', 'front', 'back',
+        'near', 'far', 'close', 'distant',
+        'corner', 'edge', 'side'
+    ];
+    
+    const words = text.toLowerCase().split(/\s+/);
+    return words.some(word => locationWords.includes(word)) && words.length <= 3;
+}
 
-              if (!resp.ok) {
-                  const errorInfo = await getDetailedErrorInfo(resp, "Execute RoboPoint Command");
-                  console.error(`Attempt ${attempt} failed:`, errorInfo);
-                  if (attempt === retries) {
-                      throw new Error(formatErrorForUser(errorInfo));
-                  }
-                  continue;
-              }
+async function executeRoboPointCommand(objectDescription, action, frameB64, retries = 3) {
+    const singleActionBlock = `[ACTION]\nRoboPoint Request: ${objectDescription}\nAction Request: ${action}`;
+    
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        console.log(`📤 Attempt ${attempt}: Sending to RoboPoint:`, singleActionBlock);
+        
+        try {
+            // Add exponential backoff for retries
+            if (attempt > 1) {
+                const delay = Math.min(2000 * Math.pow(2, attempt - 2), 10000); // 2s, 4s, 8s max
+                addChatMessage("Max", `⏳ Retrying in ${delay/1000}s... (attempt ${attempt}/${retries})`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
 
-              const result = await resp.json();
-              console.log("📥 RoboPoint result:", result);
-              
-              if (result.error) {
-                  throw new Error(`RoboPoint server error: ${result.error}`);
-              }
-              
-              return result;
-          } catch (error) {
-              console.error(`❌ Attempt ${attempt} error:`, error);
-              if (attempt === retries) {
-                  throw error;
-              }
-              // Wait before retry
-              await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-      }
-  }
+            // Test RoboPoint service availability first
+            if (attempt > 1) {
+                addChatMessage("Max", `🔍 Testing RoboPoint service connection...`);
+                const healthCheck = await testRoboPointHealth();
+                if (!healthCheck) {
+                    throw new Error("RoboPoint service is not responding to health check");
+                }
+                addChatMessage("Max", `✅ RoboPoint service is responsive`);
+            }
+
+            const resp = await fetch("/exec_action", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    action_block: singleActionBlock,
+                    seg_frame: frameB64
+                }),
+                signal: AbortSignal.timeout(120000) // 2 minute timeout
+            });
+
+            if (!resp.ok) {
+                const errorInfo = await getDetailedErrorInfo(resp, "Execute RoboPoint Command");
+                console.error(`Attempt ${attempt} failed:`, errorInfo);
+                
+                // Check if it's a server error vs network error
+                if (resp.status >= 500) {
+                    addChatMessage("Max", `⚠️ RoboPoint server error (${resp.status}). Retrying...`);
+                } else if (resp.status === 0) {
+                    addChatMessage("Max", `⚠️ Network connection lost. Retrying...`);
+                } else {
+                    throw new Error(formatErrorForUser(errorInfo));
+                }
+                
+                if (attempt === retries) {
+                    throw new Error(formatErrorForUser(errorInfo));
+                }
+                continue;
+            }
+
+            const result = await resp.json();
+            console.log("📥 RoboPoint result:", result);
+            
+            if (result.error) {
+                throw new Error(`RoboPoint server error: ${result.error}`);
+            }
+            
+            addChatMessage("Max", `✅ RoboPoint responded successfully for "${objectDescription}"`);
+            return result;
+            
+        } catch (error) {
+            console.error(`❌ Attempt ${attempt} error:`, error);
+            
+            if (error.name === 'TimeoutError') {
+                addChatMessage("Max", `⏰ Request timeout on attempt ${attempt}`);
+            } else if (error.message.includes('NetworkError') || error.message.includes('fetch')) {
+                addChatMessage("Max", `🌐 Network error on attempt ${attempt}: ${error.message}`);
+            } else {
+                addChatMessage("Max", `❌ Error on attempt ${attempt}: ${error.message}`);
+            }
+            
+            if (attempt === retries) {
+                addChatMessage("Max", `❌ All ${retries} attempts failed for "${objectDescription}"`);
+                throw error;
+            }
+        }
+    }
+}
+
+async function resetRoboPointService() {
+    try {
+        addChatMessage("Max", "🔄 Attempting to reset RoboPoint service state...");
+        
+        // Call reset endpoint if available
+        const resp = await fetch("/reset_seg", {
+            method: "POST",
+            signal: AbortSignal.timeout(10000)
+        });
+        
+        if (resp.ok) {
+            addChatMessage("Max", "✅ RoboPoint service state reset");
+            // Give service time to fully reset
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            return true;
+        }
+        return false;
+    } catch (e) {
+        console.error("Service reset failed:", e);
+        return false;
+    }
+}
 
   // Function to call exec_planner endpoint
   async function callExecPlanner(currentResults, headless = true) {
