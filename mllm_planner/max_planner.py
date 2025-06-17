@@ -33,7 +33,7 @@ except ImportError:
 # =============================================================================
 
 # Online VLM Configuration
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_VLM_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_LLM_URL = "https://openrouter.ai/api/v1"
 ONLINE_VLM_MODEL = "qwen/qwen2.5-vl-72b-instruct:free"
@@ -41,12 +41,13 @@ ONLINE_LLM_MODEL = "deepseek/deepseek-chat-v3-0324:free"
 
 # Available Robot Actions
 AVAILABLE_ACTIONS = {
-    "move": "move to the specified object",
-    "pick": "pick up the object", 
-    "place": "put down the object at the current location",
+    "home": "return the robot to its home position (0, 0, 0)",
+    "pickmove": "move to the object location to prepare for picking",
+    "pick": "pick up the object at current location", 
+    "placemove": "move to the target location to prepare for placing",
+    "place": "put down the object at current location",
     "OpenGripper": "open the gripper",
-    "CloseGripper": "close the gripper",
-    "Home": "return the robot to its home position"
+    "CloseGripper": "close the gripper"
 }
 
 # =============================================================================
@@ -591,7 +592,7 @@ def extract_plan_from_response(plan_response, thinking_content, task_description
     if actions and len(actions) > 1:
         return "plan: " + " -> ".join(actions)
     
-    # Method 4: Fallback plan generation (LAST RESORT)
+    # Method 4: Fallback plan generation with new action format (LAST RESORT)
     print("[WARNING] Could not extract valid plan from model output. Creating fallback plan...")
     
     # Identify target objects from task
@@ -625,8 +626,11 @@ def extract_plan_from_response(plan_response, thinking_content, task_description
     target_obj = target_objects[0] if target_objects else None
     
     if target_obj:
-        # Create plan based on dependencies
+        # Create plan based on dependencies using new action format
         plan_steps = []
+        
+        # Always start from home
+        plan_steps.append("(home, (0.0, 0.0, 0.0), home)")
         
         for target in target_objects:
             # Find blocking objects
@@ -647,30 +651,59 @@ def extract_plan_from_response(plan_response, thinking_content, task_description
                     if any(pattern in relationships_str.lower() for pattern in blocking_patterns):
                         target_blocking_objects.append(obj)
             
-            # Move blocking objects first
+            # Move blocking objects first using new workflow
             for blocking_obj in target_blocking_objects:
                 blocking_coords = get_object_coordinates(blocking_obj, json_objects)
                 plan_steps.extend([
-                    f"({blocking_obj}, {blocking_coords}, move)",
+                    f"({blocking_obj}, {blocking_coords}, pickmove)",
                     f"({blocking_obj}, {blocking_coords}, pick)",
-                    f"({blocking_obj}, {blocking_coords}, place)"
+                    f"(home, (0.0, 0.0, 0.0), home)",
+                    f"(neutral, (50.0, 50.0, 30.0), placemove)",
+                    f"(neutral, (50.0, 50.0, 30.0), place)",
+                    f"(home, (0.0, 0.0, 0.0), home)"
                 ])
             
-            # Then pick up target
+            # Then pick up target using new workflow
             target_coords = get_object_coordinates(target, json_objects)
             plan_steps.extend([
-                f"({target}, {target_coords}, move)",
+                f"({target}, {target_coords}, pickmove)",
                 f"({target}, {target_coords}, pick)"
             ])
+            
+            # If this is a pick and place task, add place sequence
+            if "place" in task_lower or "put" in task_lower:
+                # Find target location from task
+                place_target = None
+                place_words = ["on", "onto", "at", "to"]
+                for word in place_words:
+                    if word in task_lower:
+                        parts = task_lower.split(word)
+                        if len(parts) > 1:
+                            place_part = parts[-1].strip()
+                            for obj in objects_list:
+                                if obj.lower() in place_part:
+                                    place_target = obj
+                                    break
+                            break
+                
+                if place_target:
+                    place_coords = get_object_coordinates(place_target, json_objects)
+                    plan_steps.extend([
+                        f"(home, (0.0, 0.0, 0.0), home)",
+                        f"({place_target}, {place_coords}, placemove)",
+                        f"({place_target}, {place_coords}, place)"
+                    ])
         
         if plan_steps:
             return "plan: " + " -> ".join(plan_steps)
         else:
+            # Simple pick operation fallback
             target_coords = get_object_coordinates(target_obj, json_objects)
-            return f"plan: ({target_obj}, {target_coords}, move) -> ({target_obj}, {target_coords}, pick)"
+            return f"plan: (home, (0.0, 0.0, 0.0), home) -> ({target_obj}, {target_coords}, pickmove) -> ({target_obj}, {target_coords}, pick)"
     
+    # Ultimate fallback
     default_coords = get_object_coordinates("Object", json_objects) if json_objects else "(0.0, 0.0, 0.0)"
-    return f"plan: (Object, {default_coords}, move) -> (Object, {default_coords}, pick)"
+    return f"plan: (home, (0.0, 0.0, 0.0), home) -> (Object, {default_coords}, pickmove) -> (Object, {default_coords}, pick)"
 
 # =============================================================================
 # MODEL MANAGEMENT
@@ -686,6 +719,12 @@ def load_vision_model():
     global online_vlm_initialized
     
     print("\n🚀 INITIALIZING VISION MODEL FOR 4-STEP PIPELINE\n")
+    
+    # Check if API key is available
+    if not OPENROUTER_API_KEY:
+        print("[ERROR] Cannot initialize vision model - OPENROUTER_API_KEY not set!")
+        print("[INFO] Please set the environment variable first:")
+        return False
     
     # Test API connection
     print(f"[INFO] Testing connection to online VLM service...")
@@ -706,7 +745,7 @@ def load_vision_model():
             "max_tokens": 5
         }
         
-        test_response = requests.post(OPENROUTER_URL, headers=headers, json=test_payload, timeout=10)
+        test_response = requests.post(OPENROUTER_VLM_URL, headers=headers, json=test_payload, timeout=10)
         
         if test_response.status_code == 200:
             print(f"[INFO] ✅ Successfully connected to online VLM service")
@@ -1105,27 +1144,35 @@ OBJECTS IN SCENE: {', '.join(objects_list)}
 SCENE DESCRIPTION: {scene_description}{coordinate_info}
 
 ROBOT ACTIONS AVAILABLE:
-- move: move robot to specific coordinates
-- pick: pick up an object (robot must be at object location)
-- place: place an object (robot must be at target location)
+- home: return robot to home position (0, 0, 0)
+- pickmove: move robot to object location to prepare for picking
+- pick: pick up an object (robot must be at object location after pickmove)
+- placemove: move robot to target location to prepare for placing
+- place: place an object (robot must be at target location after placemove)
 - OpenGripper: open gripper
 - CloseGripper: close gripper
-- Home: return to home position
 
 ACTION FORMAT RULES:
 1. All actions: (ObjectName, (x, y, z), ActionName) - object name, 3D coordinates, and action
-2. move actions: (ObjectName, (x, y, z), move) - move to object coordinates
-3. pick/place actions: (ObjectName, (x, y, z), pick) or (ObjectName, (x, y, z), place) - pick/place with coordinates
-4. gripper actions: (ObjectName, (x, y, z), OpenGripper) or (ObjectName, (x, y, z), CloseGripper) - gripper actions with coordinates
-5. Home action: (Home, (0.0, 0.0, 0.0), Home) - return to home position
+2. home actions: (home, (0.0, 0.0, 0.0), home) - return to home position
+3. pickmove actions: (ObjectName, (x, y, z), pickmove) - move to object coordinates for picking
+4. pick actions: (ObjectName, (x, y, z), pick) - pick up object at current location
+5. placemove actions: (TargetObject, (x, y, z), placemove) - move to target location for placing
+6. place actions: (TargetObject, (x, y, z), place) - place object at current location
+7. gripper actions: (ObjectName, (x, y, z), OpenGripper) or (ObjectName, (x, y, z), CloseGripper)
 
-LOGIC: Each action includes object name, coordinates, and action type for complete specification.
+MANDATORY WORKFLOW FOR PICK AND PLACE OPERATIONS:
+1. ALWAYS start from home position: (home, (0.0, 0.0, 0.0), home)
+2. For picking: home -> pickmove -> pick -> home
+3. For placing: home -> placemove -> place
+4. For pick and place: home -> pickmove -> pick -> home -> placemove -> place
 
 CRITICAL PLANNING RULES:
 1. If you need to pick up an object that has other objects ON TOP OF it or RESTING ON it, you MUST first move those blocking objects away.
 2. You cannot pick up an object if another object is resting on it or on top of it.
 3. Always check the scene description for spatial relationships before planning.
 4. If an object A is "on top of", "resting on", or "above" object B, then A must be moved before B can be picked up.
+5. ALWAYS return to home position after picking an object and before moving to place location.
 
 SPATIAL LOGIC CLARIFICATION:
 - If "X is on top of Y" → X is accessible, Y is blocked by X
@@ -1134,45 +1181,44 @@ SPATIAL LOGIC CLARIFICATION:
 - To pick up Y (when X is on top of Y): move X away first, then pick up Y
 
 STEP-BY-STEP PLANNING:
-1. Identify the target object from the task
-2. Check: Is anything ON TOP OF the target object? 
-3. If YES: move those objects first
-4. If NO: Pick up target directly
-5. For multi-step tasks: handle each target in sequence
+1. Start from home position
+2. Identify the target object from the task
+3. Check: Is anything ON TOP OF the target object? 
+4. If YES: move those objects first (using full pick/place workflow)
+5. If NO: Pick up target directly (using full pick/place workflow)
+6. For multi-step tasks: handle each target in sequence with home returns
 
 EXAMPLES:
-Task: "Move to the pen"
-Plan: (Pen, (15, 20, 30), move)
-
 Task: "Pick up the pen"
-Plan: (Pen, (15, 20, 30), move) -> (Pen, (15, 20, 30), pick)
+Plan: (home, (0.0, 0.0, 0.0), home) -> (Pen, (15, 20, 30), pickmove) -> (Pen, (15, 20, 30), pick)
 
-Task: "Pick up the pen and place it on the USB drive"
-Plan: (Pen, (15, 20, 30), move) -> (Pen, (15, 20, 30), pick) -> (USB Drive, (25, 25, 25), move) -> (Pen, (25, 25, 25), place)
+Task: "Pick up the pen and place it on the plate"
+Plan: (home, (0.0, 0.0, 0.0), home) -> (Pen, (15, 20, 30), pickmove) -> (Pen, (15, 20, 30), pick) -> (home, (0.0, 0.0, 0.0), home) -> (plate, (25, 25, 25), placemove) -> (plate, (25, 25, 25), place)
 
 Task: "Move the pen away from paper, then pick up paper"
-Plan: (Pen, (15, 20, 30), move) -> (Pen, (15, 20, 30), pick) -> (Pen, (50, 50, 30), move) -> (Pen, (50, 50, 30), place) -> (Paper, (20, 20, 25), move) -> (Paper, (20, 20, 25), pick)
+Plan: (home, (0.0, 0.0, 0.0), home) -> (Pen, (15, 20, 30), pickmove) -> (Pen, (15, 20, 30), pick) -> (home, (0.0, 0.0, 0.0), home) -> (neutral, (50, 50, 30), placemove) -> (neutral, (50, 50, 30), place) -> (home, (0.0, 0.0, 0.0), home) -> (Paper, (20, 20, 25), pickmove) -> (Paper, (20, 20, 25), pick)
 
 INSTRUCTIONS:
 - Use the exact coordinates (x, y, z) provided in the OBJECT COORDINATES section
 - If coordinates are not provided for an object, use (0.0, 0.0, 0.0)
 - Handle multi-step tasks by addressing each target in order
-- For blocking objects: move them to a neutral location first
-- ONLY perform the actions explicitly requested in the task - do not add extra actions
-- If task says "move to X", only generate move action, do not add pick/place actions
-- If task says "pick up X", generate move followed by pick actions
-- If task says "place X", assume object is already picked and generate move followed by place
+- For blocking objects: move them to a neutral location first using full workflow
+- ALWAYS include home position movements as specified in the workflow
+- Use "pickmove" before "pick" and "placemove" before "place"
+- ONLY perform the actions explicitly requested in the task
 - Provide ONLY the final action plan in the exact format below
 - Do not include reasoning or explanation in the final output, just the plan
 
 FINAL ACTION PLAN (use this exact format):
 Max: The task plan is (ObjectName, (x, y, z), action) -> (ObjectName, (x, y, z), action) -> (ObjectName, (x, y, z), action) -> ...
 
-IMPORTANT: 
-- move actions: (ObjectName, (x, y, z), move)
-- pick/place actions: (ObjectName, (x, y, z), pick) or (ObjectName, (x, y, z), place)
-- gripper actions: (ObjectName, (x, y, z), OpenGripper) or (ObjectName, (x, y, z), CloseGripper)
-- home action: (Home, (0.0, 0.0, 0.0), Home)"""
+IMPORTANT ACTION TYPES: 
+- home: (home, (0.0, 0.0, 0.0), home)
+- pickmove: (ObjectName, (x, y, z), pickmove)
+- pick: (ObjectName, (x, y, z), pick)
+- placemove: (TargetName, (x, y, z), placemove)
+- place: (TargetName, (x, y, z), place)
+- gripper: (ObjectName, (x, y, z), OpenGripper) or (ObjectName, (x, y, z), CloseGripper)"""
 
     try:
         print("[INFO] Running STEP 4 action planning via online API... ⏳")
@@ -1192,10 +1238,18 @@ IMPORTANT:
         return None
     
     # Extract plan from response
-    final_plan = extract_plan_from_response(plan_response, "", task_description, objects_list, relationships_str, json_objects)
+    raw_plan = extract_plan_from_response(plan_response, "", task_description, objects_list, relationships_str, json_objects)
     
-    print(f"[STEP 4 RESULT] Final Action Plan: {final_plan}")
-    return final_plan
+    print(f"[STEP 4 RESULT] Raw Action Plan: {raw_plan}")
+    
+    # Apply coordinate transformations
+    if raw_plan:
+        final_plan = transform_plan_coordinates(raw_plan)
+        print(f"[STEP 4 RESULT] Final Transformed Plan: {final_plan}")
+        return final_plan
+    else:
+        print("[ERROR] No plan generated to transform")
+        return final_plan
 
 # =============================================================================
 # MAIN PIPELINE FUNCTIONS
@@ -1403,6 +1457,13 @@ def robot_action_planner(task_description, image_path, output_format="json", for
         print("🤖"*20)
         print(f"Plan: {final_plan}")
         
+        # Give user time to see the complete action plan visualization (5 seconds)
+        print("⏳ Displaying action plan... Robot will start execution in 5 seconds")
+        import time
+        time.sleep(5)
+        
+        print("🚀 Starting robot execution now...")
+        
         # Call robot_action execution function directly
         execution_success = robot_action.execute_plan_from_planner(final_plan, headless=headless)
         result["execution_success"] = execution_success
@@ -1527,6 +1588,69 @@ def call_planner(current_results, headless=True):
             "action_plan": "",
             "execution_success": False
         }
+
+# =============================================================================
+# COORDINATE TRANSFORMATION
+# =============================================================================
+
+def transform_plan_coordinates(plan_string):
+    """
+    Transform coordinates in the final plan according to robot coordinate system.
+    
+    Transformations:
+    - pickmove: (x, y, z) -> (-(30-x), -(60-y), z)
+    - placemove: (x, y, z) -> (-(30-x), -(60-y), z-100)
+    
+    Args:
+        plan_string (str): Original plan string with coordinates
+        
+    Returns:
+        str: Transformed plan string with new coordinates
+    """
+    import re
+    
+    print("\n" + "🔧"*20)
+    print("COORDINATE TRANSFORMATION")
+    print("🔧"*20)
+    print(f"[INFO] Original plan: {plan_string}")
+    
+    def transform_coordinates(match):
+        # Extract the full action tuple
+        full_match = match.group(0)
+        object_name = match.group(1)
+        x = float(match.group(2))
+        y = float(match.group(3))
+        z = float(match.group(4))
+        action = match.group(5)
+        
+        # Apply transformations based on action type
+        if action == "pickmove":
+            new_x = -(30 - x)
+            new_y = -(60 - y)
+            new_z = z
+            print(f"[TRANSFORM] {action}: ({x}, {y}, {z}) -> ({new_x}, {new_y}, {new_z})")
+        elif action == "placemove":
+            new_x = -(30 - x)
+            new_y = -(60 - y)
+            new_z = z - 100
+            print(f"[TRANSFORM] {action}: ({x}, {y}, {z}) -> ({new_x}, {new_y}, {new_z})")
+        else:
+            # No transformation for other actions (home, pick, place, etc.)
+            new_x, new_y, new_z = x, y, z
+        
+        # Return the transformed action tuple
+        return f"({object_name}, ({new_x}, {new_y}, {new_z}), {action})"
+    
+    # Pattern to match action tuples: (ObjectName, (x, y, z), action)
+    pattern = r'\(([^,]+),\s*\(([^,]+),\s*([^,]+),\s*([^,)]+)\),\s*([^)]+)\)'
+    
+    # Apply transformations
+    transformed_plan = re.sub(pattern, transform_coordinates, plan_string)
+    
+    print(f"[INFO] Transformed plan: {transformed_plan}")
+    print("🔧"*20)
+    
+    return transformed_plan
 
 # =============================================================================
 # MAIN FUNCTION FOR JSON INPUT

@@ -74,6 +74,27 @@ class FrankaAutomation:
             self.logger.error(f"❌ Robot initialization failed: {e}")
             self.save_debug_info()
             return False
+    def get_current_pos(self) -> dict:
+        """Get current robot position - wrapper for interactive use."""
+        if not self.is_robot_ready():
+            return None
+        
+        try:
+            return self.commands.get_current_position()
+        except Exception as e:
+            self.logger.error(f"❌ Get position failed: {e}")
+            return None
+
+    def move_to_home(self) -> bool:
+        """Move robot to home position - wrapper for interactive use."""
+        if not self.is_robot_ready():
+            return False
+        
+        try:
+            return self.commands.move_to_home_position()
+        except Exception as e:
+            self.logger.error(f"❌ Move to home failed: {e}")
+            return False
     
     def is_robot_ready(self) -> bool:
         """Check if robot is initialized and ready."""
@@ -245,14 +266,32 @@ class FrankaAutomation:
             
             success = False
             
-            if action.lower() == "move":
-                success = self.move_robot(x=x, y=y, z=z)
+            if action.lower() == "pickmove":
+                if z >= 500:
+                    success = self.move_robot(x, y, 500)
+                    success = self.move_robot(0, 0, z-500)
+                    time.sleep(10)
+                else:
+                    success = self.move_robot(x, y, z)
+                    time.sleep(10)
+            
+            elif action.lower() == "placemove":
+                if z >= 500:
+                    success = self.move_robot(x, y, 500)
+                    success = self.move_robot(0, 0, z-500)
+                    time.sleep(10)
+                else:
+                    success = self.move_robot(x, y, z)
+                    time.sleep(10)
                 
             elif action.lower() == "pick":
-                success = self.suction_on(load=1000, vacuum=650, timeout=2.0)
+                success = self.suction_on(load=100, vacuum=650, timeout=2.0)
                 
             elif action.lower() == "place":
                 success = self.suction_off()
+            
+            elif action.lower() == "home":
+                success = self.move_to_home()
                 
             else:
                 self.logger.error(f"❌ Unknown action: {action}")

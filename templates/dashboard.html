@@ -125,10 +125,11 @@
     }
     #llmConsole {
       font-size: 1.2em;          /* Reduced from 2em to 1.2em */
-      line-height: 1.4;
-      white-space: pre-wrap;   /* keep spaces & wrap long lines */
+      line-height: 1.5;          /* Increased for better readability */
+      white-space: pre-wrap;      /* keep spaces & wrap long lines */
       word-break: break-word;
-      color: #4af;             /* Blue for LLM Reasoning */
+      color: #4af;                /* Blue for LLM Reasoning */
+      font-family: 'Consolas', 'Monaco', 'Courier New', monospace; /* Better monospace font */
     }
     
     /* Responsive LLM Console */
@@ -2142,17 +2143,98 @@ for (let i = 0; i < objects.length; i++) {
                   if (!line.trim()) continue;
 
                   if (line.startsWith("data: ")) {
-                      let content = line.slice(6).trim();
+                      let content = line.slice(6);
 
-                      if (content === "[DONE]") {
+                      if (content.trim() === "[DONE]") {
                           plannerCompleted = true;
                           break;
                       }
 
                       if (content) {
-                          // Add the content to the LLM Reasoning panel
-                          plannerOutput += content + '\n';
-                          llmConsole.innerHTML = plannerOutput;
+                          // Comprehensive formatting to ensure proper line breaks and structure
+                          let processedContent = content;
+                          
+                          // Define patterns that need line breaks BEFORE them
+                          const needsNewlineBefore = [
+                              // Major section headers
+                              /🚀{15,}/,  // Rocket emoji lines
+                              /🎉{15,}/,  // Party emoji lines  
+                              /🤖{15,}/,  // Robot emoji lines
+                              /🔧{15,}/,  // Tool emoji lines
+                              /={15,}/,   // Equal sign dividers
+                              /-{15,}/,   // Dash dividers
+                              
+                              // Section titles
+                              /RUNNING COMPLETE.*PIPELINE/,
+                              /4-STEP PIPELINE COMPLETED/,
+                              /EXECUTING GENERATED PLAN/,
+                              /COORDINATE TRANSFORMATION/,
+                              
+                              // Step headers
+                              /STEP \d+:/,
+                              /🔍 STEP/,
+                              /✅ STEP/,
+                              /🧠 STEP/,
+                              /🚀 STEP/,
+                              
+                              // Info and status messages
+                              /\[INFO\]/,
+                              /\[WARNING\]/,
+                              /\[ERROR\]/,
+                              /\[VALID\]/,
+                              /\[STEP \d+ (RESULT|SUCCESS|OUTPUT)\]/,
+                              /\[CONSISTENCY CHECK\]/,
+                              /\[TRANSFORM\]/,
+                              
+                              // Streaming markers
+                              /\[STREAMING (VLM|LLM) RESPONSE\]/,
+                              /\[(VLM|LLM) RESPONSE COMPLETE\]/,
+                              
+                              // Markdown headers
+                              /^#{1,6} /,
+                              /^### /,
+                              /^- \*\*/,  // Bold list items
+                              
+                              // Special content
+                              /REFINED_OBJECTS:/,
+                              /REFINED_RELATIONSHIPS:/,
+                              /REASONING:/
+                          ];
+                          
+                          // Check if content needs a line break before it
+                          const needsBreakBefore = needsNewlineBefore.some(pattern => pattern.test(content));
+                          
+                          // Add line break before if needed (but not if already at start of line)
+                          if (needsBreakBefore && plannerOutput && !plannerOutput.endsWith('\n')) {
+                              processedContent = '\n' + processedContent;
+                          }
+                          
+                          // Define patterns that need line breaks AFTER them
+                          const needsNewlineAfter = [
+                              /🚀{15,}/,
+                              /🎉{15,}/,
+                              /🤖{15,}/,
+                              /🔧{15,}/,
+                              /={15,}/,
+                              /-{15,}/,
+                              /\[STREAMING (VLM|LLM) RESPONSE\]/,
+                              /\[(VLM|LLM) RESPONSE COMPLETE\]/,
+                              /RUNNING COMPLETE.*PIPELINE/,
+                              /4-STEP PIPELINE COMPLETED/,
+                              /EXECUTING GENERATED PLAN/,
+                              /COORDINATE TRANSFORMATION/
+                          ];
+                          
+                          // Add line break after if needed
+                          if (needsNewlineAfter.some(pattern => pattern.test(content)) && !processedContent.endsWith('\n')) {
+                              processedContent += '\n';
+                          }
+                          
+                          // Add the processed content
+                          plannerOutput += processedContent;
+                          
+                          // Use textContent to preserve whitespace with pre-wrap CSS
+                          llmConsole.textContent = plannerOutput;
                           llmConsole.scrollTop = llmConsole.scrollHeight;
                           
                           // Check for success indicators
@@ -2161,19 +2243,34 @@ for (let i = 0; i < objects.length; i++) {
                               addChatMessage("Max", "🤖 Robot execution completed successfully!");
                           } else if (content.includes("❌ Robot execution failed")) {
                               addChatMessage("Max", "❌ Robot execution failed");
-                          } else if (content.includes("Generated action plan:") || content.includes("[STEP 4 RESULT] Final Action Plan:")) {
-                              // Extract and display action plan immediately
+                          } else if (content.includes("Generated action plan:") || content.includes("[STEP 4 RESULT] Final Action Plan:") || content.includes("[STEP 4 RESULT] Final Transformed Plan:")) {
+                              // Display the action plan sequentially (one by one) immediately when detected
+                              console.log("🎯 Action plan detected, processing:", content);
                               extractActionPlanFromOutput(content);
+                          } else if (content.includes("4-STEP PIPELINE COMPLETED")) {
+                              addChatMessage("Max", "✅ Action plan generation completed! Plan visualization ready.");
                           } else if (content.includes("EXECUTING GENERATED PLAN ON ROBOT")) {
-                              addChatMessage("Max", "🤖 Starting robot execution of the action plan...");
-                              // Wait a moment for the action plan to be fully displayed, then start execution indicators
-                              setTimeout(() => {
-                                  if (window.currentActionPlan && window.currentActionPlan.length > 0) {
-                                      addChatMessage("Max", `🚀 Ready to execute ${window.currentActionPlan.length} actions`);
+                              addChatMessage("Max", "⏳ Action plan ready! Preparing for execution...");
+                              // Reset all actions to pending status immediately for clean visualization
+                              if (window.currentActionPlan && window.currentActionPlan.length > 0) {
+                                  for (let i = 0; i < window.currentActionPlan.length; i++) {
+                                      updateActionStatus(i, 'pending');
+                                  }
+                              }
+                          } else if (content.includes("Robot will start execution in 5 seconds") || content.includes("Displaying action plan... Robot will start execution in 5 seconds")) {
+                              addChatMessage("Max", "⏳ Action plan complete! Robot will start execution in 5 seconds...");
+                              // Show countdown
+                              let countdown = 5;
+                              const countdownInterval = setInterval(() => {
+                                  countdown--;
+                                  if (countdown > 0) {
+                                      addChatMessage("Max", `⏰ Starting in ${countdown} seconds...`);
+                                  } else {
+                                      clearInterval(countdownInterval);
                                   }
                               }, 1000);
-                          } else if (content.includes("4-STEP PIPELINE COMPLETED")) {
-                              addChatMessage("Max", "✅ Action plan generation completed!");
+                          } else if (content.includes("Starting robot execution now")) {
+                              addChatMessage("Max", `🚀 Starting execution of ${window.currentActionPlan ? window.currentActionPlan.length : 'N/A'} actions`);
                           } else if (content.includes("Max planner completed with success: true")) {
                               addChatMessage("Max", "✅ Max Planner executed successfully!");
                           } else if (content.includes("Max planner completed with success: false")) {
@@ -2235,19 +2332,27 @@ for (let i = 0; i < objects.length; i++) {
   const actionIconMap = {
     'pick': 'PickupObject.png',
     'pickup': 'PickupObject.png',
+    'pickupobject': 'PickupObject.png',
     'place': 'PutDownObject.png',
     'put': 'PutDownObject.png',
     'putdown': 'PutDownObject.png',
+    'putdownobject': 'PutDownObject.png',
     'move': 'MovetoObject.png',
     'moveto': 'MovetoObject.png',
+    'movetoobject': 'MovetoObject.png',
+    'pickmove': 'MovetoObject.png',
+    'placemove': 'MovetoObject.png',
     'home': 'Home.png',
     'open': 'OpenGripper.png',
-    'close': 'CloseGripper.png'
+    'close': 'CloseGripper.png',
+    'opengripper': 'OpenGripper.png',
+    'closegripper': 'CloseGripper.png'
   };
 
-  // Global variable to store current action plan
+  // Global variables to store current action plan
   window.currentActionPlan = [];
   window.currentActionIndex = -1;
+  window.pendingActionPlan = null;
 
   function parseActionPlan(planText) {
     console.log("🔍 Parsing action plan:", planText);
@@ -2284,7 +2389,7 @@ for (let i = 0; i < objects.length; i++) {
     return actions;
   }
 
-  function displayActionPlan(actions) {
+  function displayActionPlan(actions, immediate = false) {
     const container = document.getElementById('actionPlanContainer');
     const placeholder = document.getElementById('actionPlanPlaceholder');
     
@@ -2297,7 +2402,7 @@ for (let i = 0; i < objects.length; i++) {
     placeholder.style.display = 'none';
     container.innerHTML = '';
     
-    // Create container for sequential display
+    // Create container for display
     const sequenceContainer = document.createElement('div');
     sequenceContainer.className = 'action-sequence';
     sequenceContainer.style.cssText = 'display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px;';
@@ -2305,10 +2410,56 @@ for (let i = 0; i < objects.length; i++) {
     
     window.currentActionPlan = actions;
     
-    // Display actions one by one with arrows
-    displayActionsSequentially(actions, sequenceContainer);
+    if (immediate) {
+      // Display all actions immediately (for plan preview)
+      displayActionsImmediately(actions, sequenceContainer);
+      console.log("✅ Action plan displayed immediately with", actions.length, "steps");
+    } else {
+      // Display actions one by one with arrows (for step-by-step animation)
+      displayActionsSequentially(actions, sequenceContainer);
+      console.log("✅ Action plan will display sequentially with", actions.length, "steps");
+    }
+  }
+
+  function displayActionsImmediately(actions, container) {
+    // Display all actions at once (for final plan preview)
+    for (let currentIndex = 0; currentIndex < actions.length; currentIndex++) {
+      const action = actions[currentIndex];
+      
+      // Add arrow before action (except for first action)
+      if (currentIndex > 0) {
+        const arrow = document.createElement('div');
+        arrow.className = 'action-arrow';
+        arrow.innerHTML = '→';
+        arrow.style.cssText = `
+          color: #4af;
+          font-size: 1.5em;
+          font-weight: bold;
+          margin: 0 4px;
+          text-shadow: 0 0 4px #4af;
+        `;
+        container.appendChild(arrow);
+      }
+      
+      // Create action step
+      const stepDiv = document.createElement('div');
+      stepDiv.className = `action-step ${action.status}`;
+      stepDiv.id = `action-step-${currentIndex}`;
+      
+      // Get the appropriate icon
+      const iconFile = actionIconMap[action.action] || 'MovetoObject.png';
+      
+      stepDiv.innerHTML = `
+        <img src="/icons/${iconFile}" alt="${action.action}" class="action-icon" title="${action.object} - ${action.action}">
+        <div class="action-label">${action.action}</div>
+        <div class="action-object" title="${action.object}">${action.object}</div>
+        <div class="action-coordinates">(${action.coordinates.x}, ${action.coordinates.y}, ${action.coordinates.z})</div>
+      `;
+      
+      container.appendChild(stepDiv);
+    }
     
-    console.log("✅ Action plan will display sequentially with", actions.length, "steps");
+    console.log("✅ All action steps displayed immediately");
   }
 
   function displayActionsSequentially(actions, container) {
@@ -2412,7 +2563,7 @@ for (let i = 0; i < objects.length; i++) {
     console.log("🧹 Action plan cleared");
   }
 
-  // Function to extract and display action plan from planner output
+  // Function to extract and display action plan from planner output (sequential animation)
   function extractActionPlanFromOutput(output) {
     // Look for different patterns of action plan output
     let planText = null;
@@ -2427,15 +2578,21 @@ for (let i = 0; i < objects.length; i++) {
       if (planMatch) {
         planText = planMatch[1];
       } else {
-        // Pattern 3: "[STEP 4 RESULT] Final Action Plan: plan: ..."
-        planMatch = output.match(/\[STEP 4 RESULT\] Final Action Plan:\s*plan:\s*(.+)/i);
+        // Pattern 3: "[STEP 4 RESULT] Final Transformed Plan: ..."
+        planMatch = output.match(/\[STEP 4 RESULT\] Final Transformed Plan:\s*(.+)/i);
         if (planMatch) {
           planText = planMatch[1];
         } else {
-          // Pattern 4: "[STEP 4 RESULT] Final Action Plan: ..."
-          planMatch = output.match(/\[STEP 4 RESULT\] Final Action Plan:\s*(.+)/i);
+          // Pattern 4: "[STEP 4 RESULT] Final Action Plan: plan: ..."
+          planMatch = output.match(/\[STEP 4 RESULT\] Final Action Plan:\s*plan:\s*(.+)/i);
           if (planMatch) {
             planText = planMatch[1];
+          } else {
+            // Pattern 5: "[STEP 4 RESULT] Final Action Plan: ..."
+            planMatch = output.match(/\[STEP 4 RESULT\] Final Action Plan:\s*(.+)/i);
+            if (planMatch) {
+              planText = planMatch[1];
+            }
           }
         }
       }
@@ -2454,11 +2611,59 @@ for (let i = 0; i < objects.length; i++) {
     return false;
   }
 
+  // Function to extract and display COMPLETE action plan immediately (all icons at once)
+  function extractAndDisplayCompleteActionPlan(output) {
+    // Look for different patterns of action plan output
+    let planText = null;
+    
+    // Pattern 1: "Generated action plan: plan: ..."
+    let planMatch = output.match(/Generated action plan:\s*plan:\s*(.+)/i);
+    if (planMatch) {
+      planText = planMatch[1];
+    } else {
+      // Pattern 2: "Generated action plan: ..."
+      planMatch = output.match(/Generated action plan:\s*(.+)/i);
+      if (planMatch) {
+        planText = planMatch[1];
+      } else {
+        // Pattern 3: "[STEP 4 RESULT] Final Transformed Plan: ..."
+        planMatch = output.match(/\[STEP 4 RESULT\] Final Transformed Plan:\s*(.+)/i);
+        if (planMatch) {
+          planText = planMatch[1];
+        } else {
+          // Pattern 4: "[STEP 4 RESULT] Final Action Plan: plan: ..."
+          planMatch = output.match(/\[STEP 4 RESULT\] Final Action Plan:\s*plan:\s*(.+)/i);
+          if (planMatch) {
+            planText = planMatch[1];
+          } else {
+            // Pattern 5: "[STEP 4 RESULT] Final Action Plan: ..."
+            planMatch = output.match(/\[STEP 4 RESULT\] Final Action Plan:\s*(.+)/i);
+            if (planMatch) {
+              planText = planMatch[1];
+            }
+          }
+        }
+      }
+    }
+    
+    if (planText) {
+      console.log("🎯 Found action plan for immediate display:", planText);
+      
+      const actions = parseActionPlan(planText);
+      if (actions.length > 0) {
+        // Display ALL actions immediately (no sequential animation)
+        displayActionPlan(actions, true);
+        addChatMessage("Max", `📋 Final Action Plan: ${actions.length} steps ready for execution`);
+        return true;
+      }
+    }
+    return false;
+  }
+
   // Test function for action plan visualization (can be called from browser console)
   window.testActionPlan = function() {
-    const testPlan = "(Banana, (-24, -189, 585), move) -> (Banana, (-24, -189, 585), pick) -> (Table, (100, 200, 300), place)";
+    const testPlan = "[STEP 4 RESULT] Final Transformed Plan: (Banana, (-24, -189, 585), move) -> (Banana, (-24, -189, 585), pick) -> (Table, (100, 200, 300), place)";
     console.log("🧪 Testing action plan with:", testPlan);
-    const actions = parseActionPlan(testPlan);
     
     // Clear any existing plan first
     clearActionPlan();
@@ -2467,48 +2672,67 @@ for (let i = 0; i < objects.length; i++) {
     addChatMessage("Max", "🧠 Generating action plan...");
     
     setTimeout(() => {
-      // Display the plan (this simulates when the plan is generated)
-      displayActionPlan(actions);
-      addChatMessage("Max", "📋 Action Plan: 3 steps will display sequentially");
-      
-      // Calculate when all icons will be displayed
-      const totalDisplayTime = actions.length * 800 + 1000;
+      // Simulate plan generation and immediately display sequentially
+      addChatMessage("Max", "📋 Action plan generated");
+      extractActionPlanFromOutput(testPlan); // This will trigger sequential display
       
       setTimeout(() => {
-        addChatMessage("Max", "✅ Action plan generation completed!");
-        addChatMessage("Max", "🤖 Starting robot execution of the action plan...");
+        // Simulate "4-STEP PIPELINE COMPLETED"
+        addChatMessage("Max", "✅ Action plan generation completed! Plan visualization ready.");
         
+        // Wait for all icons to appear sequentially, then continue
         setTimeout(() => {
-          addChatMessage("Max", "🚀 Ready to execute 3 actions");
+          addChatMessage("Max", "⏳ Action plan ready! Preparing for execution...");
+          addChatMessage("Max", "⏳ Action plan complete! Robot will start execution in 5 seconds...");
           
-          // Start execution simulation
-          setTimeout(() => {
-            updateActionStatus(0, 'current');
-            addChatMessage("Max", "🔄 Executing step 1 of 3");
+          // Show countdown
+          let countdown = 5;
+          const countdownInterval = setInterval(() => {
+              countdown--;
+              if (countdown > 0) {
+                  addChatMessage("Max", `⏰ Starting in ${countdown} seconds...`);
+              } else {
+                  clearInterval(countdownInterval);
+                  addChatMessage("Max", "🚀 Starting execution of 3 actions");
+                  
+                  // Reset all actions to pending for clean execution tracking
+                  if (window.currentActionPlan && window.currentActionPlan.length > 0) {
+                      for (let i = 0; i < window.currentActionPlan.length; i++) {
+                          updateActionStatus(i, 'pending');
+                      }
+                  }
+                  
+                  // Start execution simulation
+                  setTimeout(() => {
+                    updateActionStatus(0, 'current');
+                    addChatMessage("Max", "🔄 Executing step 1 of 3");
+                  }, 1000);
+                  
+                  setTimeout(() => {
+                    updateActionStatus(0, 'completed');
+                    updateActionStatus(1, 'current');
+                    addChatMessage("Max", "✅ Step 1 completed");
+                    addChatMessage("Max", "🔄 Executing step 2 of 3");
+                  }, 3000);
+                  
+                  setTimeout(() => {
+                    updateActionStatus(1, 'completed');
+                    updateActionStatus(2, 'current');
+                    addChatMessage("Max", "✅ Step 2 completed");
+                    addChatMessage("Max", "🔄 Executing step 3 of 3");
+                  }, 5000);
+                  
+                  setTimeout(() => {
+                    updateActionStatus(2, 'completed');
+                    addChatMessage("Max", "✅ Step 3 completed");
+                    addChatMessage("Max", "🎉 All steps completed successfully!");
+                  }, 7000);
+              }
           }, 1000);
           
-          setTimeout(() => {
-            updateActionStatus(0, 'completed');
-            updateActionStatus(1, 'current');
-            addChatMessage("Max", "✅ Step 1 completed");
-            addChatMessage("Max", "🔄 Executing step 2 of 3");
-          }, 3000);
-          
-          setTimeout(() => {
-            updateActionStatus(1, 'completed');
-            updateActionStatus(2, 'current');
-            addChatMessage("Max", "✅ Step 2 completed");
-            addChatMessage("Max", "🔄 Executing step 3 of 3");
-          }, 5000);
-          
-          setTimeout(() => {
-            updateActionStatus(2, 'completed');
-            addChatMessage("Max", "✅ Step 3 completed");
-            addChatMessage("Max", "🎉 All steps completed successfully!");
-          }, 7000);
-          
-        }, 1000);
-      }, totalDisplayTime);
+        }, 3000); // Wait 3 seconds for all icons to appear sequentially (3 actions * 800ms + buffer)
+        
+      }, 1000);
       
     }, 1000);
   };
