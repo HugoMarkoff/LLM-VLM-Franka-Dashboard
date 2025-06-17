@@ -2352,10 +2352,10 @@ async function resetRoboPointService() {
                                       updateActionStatus(i, 'pending');
                                   }
                               }
-                          } else if (content.includes("Robot will start execution in 5 seconds") || content.includes("Displaying action plan... Robot will start execution in 5 seconds")) {
-                              addChatMessage("Max", "⏳ Action plan complete! Robot will start execution in 5 seconds...");
+                          } else if (content.includes("Robot will start execution in 3 seconds") || content.includes("Displaying action plan... Robot will start execution in 3 seconds")) {
+                              addChatMessage("Max", "⏳ Action plan complete! Robot will start execution in 3 seconds...");
                               // Show countdown
-                              let countdown = 5;
+                              let countdown = 3;
                               const countdownInterval = setInterval(() => {
                                   countdown--;
                                   if (countdown > 0) {
@@ -2778,10 +2778,10 @@ async function resetRoboPointService() {
         // Wait for all icons to appear sequentially, then continue
         setTimeout(() => {
           addChatMessage("Max", "⏳ Action plan ready! Preparing for execution...");
-          addChatMessage("Max", "⏳ Action plan complete! Robot will start execution in 5 seconds...");
+          addChatMessage("Max", "⏳ Action plan complete! Robot will start execution in 3 seconds...");
           
           // Show countdown
-          let countdown = 5;
+          let countdown = 3;
           const countdownInterval = setInterval(() => {
               countdown--;
               if (countdown > 0) {

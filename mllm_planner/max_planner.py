@@ -20,6 +20,10 @@ import io
 import contextlib
 import base64
 from openai import OpenAI
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Import robot action execution
 try:
@@ -1461,10 +1465,8 @@ def robot_action_planner(task_description, image_path, output_format="json", for
         print("🤖"*20)
         print(f"Plan: {final_plan}")
         
-        # Give user time to see the complete action plan visualization (5 seconds)
-        print("⏳ Displaying action plan... Robot will start execution in 5 seconds")
-        import time
-        time.sleep(5)
+        # Give user time to see the complete action plan visualization (3 seconds)
+        print("⏳ Displaying action plan... Robot will start execution now")
         
         print("🚀 Starting robot execution now...")
         

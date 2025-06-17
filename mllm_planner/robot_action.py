@@ -270,19 +270,16 @@ class FrankaAutomation:
                 if z >= 500:
                     success = self.move_robot(x, y, 500)
                     success = self.move_robot(0, 0, z-500)
-                    time.sleep(10)
                 else:
                     success = self.move_robot(x, y, z)
-                    time.sleep(10)
             
             elif action.lower() == "placemove":
                 if z >= 500:
                     success = self.move_robot(x, y, 500)
                     success = self.move_robot(0, 0, z-500)
-                    time.sleep(10)
                 else:
                     success = self.move_robot(x, y, z)
-                    time.sleep(10)
+
                 
             elif action.lower() == "pick":
                 success = self.suction_on(load=100, vacuum=650, timeout=2.0)
@@ -300,10 +297,6 @@ class FrankaAutomation:
             if not success:
                 self.logger.error(f"❌ Failed to execute step {i}: {action} {object_name}")
                 return False
-            
-            # Add delay between actions for stability
-            self.logger.info("⏳ Waiting 2 seconds before next action...")
-            time.sleep(2)
         
         self.logger.info("🎉 Plan execution completed successfully!")
         return True
