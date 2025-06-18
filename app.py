@@ -31,10 +31,17 @@ from rutils.robot_interface import FrankaRobotInterface
 from rutils.robot_commands import FrankaRobotCommands
 from rutils.network_manager import NetworkManager
 from selenium import webdriver
+import logging
 
 
 app = Flask(__name__)
 CORS(app)
+
+# Alternative: Completely disable werkzeug logging
+
+log = logging.getLogger('werkzeug')
+log.disabled = True
+#log.setLevel(logging.ERROR)  # Only show errors, not INFO messages
 
 ROBOPOINT_IMAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROBOPOINT_IMAGE_COUNTER_FILE = os.path.join(ROBOPOINT_IMAGE_DIR, "robopoint_image_counter.txt")
@@ -1234,8 +1241,6 @@ def process_depth():
     mode = data.get("camera_mode", "off")
     local_idx = data.get("local_idx", -1)
     frame_b64 = data.get("frame", "")
-
-    print(f"[Depth] Received => mode={mode} local_idx={local_idx}")
 
     if mode == "off":
         depth_handler.stop_local_camera()

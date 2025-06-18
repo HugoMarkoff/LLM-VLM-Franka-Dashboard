@@ -1568,7 +1568,11 @@ segContainer.addEventListener("click", async ev => {
           console.log("📤 Attempting fetch to /chat-stream");
           const resp = await fetch("/chat-stream", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: { 
+                  "Content-Type": "application/json",
+                  "Accept": "text/event-stream",
+                  "Cache-Control": "no-cache"
+              },
               body: JSON.stringify({ text: userText })
           });
 
@@ -1585,65 +1589,91 @@ segContainer.addEventListener("click", async ev => {
           let reasoning = "";
           let answer = "";
           let actionBuffer = "";
+          let allContent = "";
+          let lastUpdateTime = Date.now();
+          const TIMEOUT_MS = 30000; // 30 second timeout
 
-          while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
+          // Add timeout monitoring
+          const timeoutCheck = setInterval(() => {
+              if (Date.now() - lastUpdateTime > TIMEOUT_MS) {
+                  console.log("⏰ Stream timeout detected, falling back to non-streaming");
+                  clearInterval(timeoutCheck);
+                  reader.cancel();
+                  return false;
+              }
+          }, 5000);
 
-              const chunk = decoder.decode(value, { stream: true });
-              const lines = chunk.split('\n');
+          try {
+              while (true) {
+                  const { done, value } = await reader.read();
+                  if (done) {
+                      console.log("✅ Stream completed normally");
+                      break;
+                  }
 
-              for (const line of lines) {
-                  if (!line.trim()) continue;
+                  lastUpdateTime = Date.now(); // Update last activity time
+                  const chunk = decoder.decode(value, { stream: true });
+                  const lines = chunk.split('\n');
 
-                  if (line.startsWith("data: ")) {
-                      let content = line.slice(6).trim();
+                  for (const line of lines) {
+                      if (!line.trim()) continue;
 
-                      if (content === "[DONE]") break;
-                      // Handle thinking and response content
-                      if (content.startsWith("thinking:")) {
-                          const thinkingToken = content.slice(9);
-                          // Add space if needed before appending token
-                          if (reasoning && thinkingToken && needsSpace(reasoning, thinkingToken)) {
-                              reasoning += " " + thinkingToken;
-                          } else {
-                              reasoning += thinkingToken;
+                      if (line.startsWith("data: ")) {
+                          let content = line.slice(6).trim();
+
+                          if (content === "[DONE]") {
+                              console.log("✅ Received [DONE] signal");
+                              clearInterval(timeoutCheck);
+                              break;
                           }
-                          llmConsole.innerHTML = reasoning;
-                          llmConsole.scrollTop = llmConsole.scrollHeight;
-                      } else if (content.startsWith("response:")) {
-                          const responseToken = content.slice(9);
-                          // PRESERVE newlines in action buffer
-                          if (answer && responseToken && needsSpace(answer, responseToken)) {
-                              answer += " " + responseToken;
+                          
+                          // Handle thinking and response content
+                          if (content.startsWith("thinking:")) {
+                              const thinkingToken = content.slice(9);
+                              reasoning = appendWithProperSpacing(reasoning, thinkingToken);
+                              llmConsole.textContent = reasoning;
+                              llmConsole.scrollTop = llmConsole.scrollHeight;
+                          } else if (content.startsWith("response:")) {
+                              const responseToken = content.slice(9);
+                              answer = appendWithProperSpacing(answer, responseToken);
+                              actionBuffer += responseToken;
+                              allContent = appendWithProperSpacing(allContent, responseToken);
+                              
+                              // Update reasoning display with all content
+                              const displayContent = reasoning + (reasoning && allContent ? "\n\n--- RESPONSE ---\n" : "") + allContent;
+                              llmConsole.textContent = displayContent;
+                              llmConsole.scrollTop = llmConsole.scrollHeight;
                           } else {
-                              answer += responseToken;
+                              answer = appendWithProperSpacing(answer, content);
+                              actionBuffer += content;
+                              allContent = appendWithProperSpacing(allContent, content);
+                              
+                              // Update reasoning display with all content
+                              const displayContent = reasoning + (reasoning && allContent ? "\n\n--- RESPONSE ---\n" : "") + allContent;
+                              llmConsole.textContent = displayContent;
+                              llmConsole.scrollTop = llmConsole.scrollHeight;
                           }
-                          // For action buffer, preserve the raw token to maintain formatting
-                          actionBuffer += responseToken;
-                      } else {
-                          // PRESERVE newlines in action buffer
-                          if (answer && content && needsSpace(answer, content)) {
-                              answer += " " + content;
-                          } else {
-                              answer += content;
-                          }
-                          // For action buffer, preserve the raw token to maintain formatting
-                          actionBuffer += content;
-                      }
 
-                      // Check for [ACTION] in the accumulated buffer
-                      if (actionBuffer.includes("[ACTION]")) {
-                          console.log("✅ [ACTION] block detected in streaming!");
-                          const actionResult = extractAndProcessAction(actionBuffer);
-                          if (actionResult.processed) {
-                              actionBuffer = actionResult.remainingBuffer;
-                              return true; // Exit early since action is being handled
+                          // Check for [ACTION] in the accumulated buffer
+                          if (actionBuffer.includes("[ACTION]")) {
+                              console.log("✅ [ACTION] block detected in streaming!");
+                              clearInterval(timeoutCheck);
+                              const actionResult = extractAndProcessAction(actionBuffer);
+                              if (actionResult.processed) {
+                                  actionBuffer = actionResult.remainingBuffer;
+                                  return true;
+                              }
                           }
                       }
                   }
               }
+          } catch (streamError) {
+              console.error("❌ Stream reading error:", streamError);
+              clearInterval(timeoutCheck);
+              return false;
           }
+
+          clearInterval(timeoutCheck);
 
           // After streaming, if no action was processed, show the response
           if (answer.trim() && !answer.includes("[ACTION]")) {
@@ -1671,26 +1701,46 @@ segContainer.addEventListener("click", async ev => {
       }
   }
 
-  // Helper function to determine if a space is needed between two text fragments
-  function needsSpace(existingText, newToken) {
-      // If either string is empty, no space is needed
-      if (!existingText || !newToken) return false;
+  // Helper function to properly append text with correct spacing
+  function appendWithProperSpacing(existingText, newToken) {
+      if (!existingText || !newToken) {
+          return (existingText || "") + (newToken || "");
+      }
 
-      // Get the last character of existing text and first character of new token
       const lastChar = existingText.slice(-1);
       const firstChar = newToken[0];
 
-      // If the last character is a space or punctuation, no additional space is needed
-      if (/\s|[.,!?;]/.test(lastChar)) return false;
+      // Don't add space if:
+      // 1. Last char is already whitespace
+      // 2. First char is whitespace or punctuation that should connect
+      // 3. We're dealing with punctuation that should connect to previous word
+      if (/\s/.test(lastChar) || 
+          /[\s.,!?;:)]/.test(firstChar) || 
+          /[(["]/.test(lastChar)) {
+          return existingText + newToken;
+      }
 
-      // If the first character is a space or punctuation, no additional space is needed
-      if (/\s|[.,!?;]/.test(firstChar)) return false;
+      // Don't add space if last char is punctuation that typically doesn't need space after
+      // when followed by certain characters
+      if (/[.,!?;:]/.test(lastChar) && /[)\]"']/.test(firstChar)) {
+          return existingText + newToken;
+      }
 
-      // If both characters are alphanumeric, a space is likely needed
-      if (/[a-zA-Z0-9]/.test(lastChar) && /[a-zA-Z0-9]/.test(firstChar)) return true;
+      // Add space if both are alphanumeric or if transitioning from punctuation to alphanumeric
+      if ((/[a-zA-Z0-9]/.test(lastChar) && /[a-zA-Z0-9]/.test(firstChar)) ||
+          (/[.,!?;:]/.test(lastChar) && /[a-zA-Z0-9]/.test(firstChar))) {
+          return existingText + " " + newToken;
+      }
 
-      // Default: no space needed (e.g., connecting symbols or mixed cases)
-      return false;
+      // Default: no space
+      return existingText + newToken;
+  }
+
+  // Keep the old function for backward compatibility but make it use the new one
+  function needsSpace(existingText, newToken) {
+      if (!existingText || !newToken) return false;
+      const result = appendWithProperSpacing(existingText, newToken);
+      return result === existingText + " " + newToken;
   }
 
   async function testServerConnection() {
