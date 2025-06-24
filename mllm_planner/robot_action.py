@@ -282,13 +282,14 @@ class FrankaAutomation:
 
                 
             elif action.lower() == "pick":
-                success = self.suction_on(load=100, vacuum=650, timeout=2.0)
+                success = self.suction_on(load=200, vacuum=750, timeout=2.0)
                 
             elif action.lower() == "place":
                 success = self.suction_off()
             
             elif action.lower() == "home":
                 success = self.move_to_home()
+                time.sleep(1)
                 
             else:
                 self.logger.error(f"❌ Unknown action: {action}")
