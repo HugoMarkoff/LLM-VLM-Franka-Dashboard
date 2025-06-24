@@ -12,3 +12,5 @@ python-dotenv==1.0.0
 selenium>=4.15.0
 webdriver-manager>=4.0.0
 scipy==1.15.3
+pyrealsense2==2.55.1.6486
+openai==1.91.0

@@ -29,7 +29,7 @@ The chatbot could be replaced by a LLM/agent/resoning model with instructions of
 Open your terminal or command prompt and run:
 
 ```bash
-git clone https://github.com/HugoMarkoff/Franka_AAU_VLM_Dashboard.git
+git clone https://github.com/HugoMarkoff/LLM-VLM-Franka-Dashboard.git
 cd Franka_AAU_VLM_Dashboard
 ```
 
