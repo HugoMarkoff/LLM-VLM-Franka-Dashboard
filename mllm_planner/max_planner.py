@@ -42,6 +42,7 @@ OPENROUTER_VLM_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_LLM_URL = "https://openrouter.ai/api/v1"
 ONLINE_VLM_MODEL = "qwen/qwen2.5-vl-72b-instruct:free"
 ONLINE_LLM_MODEL = "deepseek/deepseek-chat-v3-0324:free"
+SERVICE_URL = "http://172.27.15.55:5004"
 
 # Available Robot Actions
 AVAILABLE_ACTIONS = {
@@ -303,7 +304,7 @@ def call_online_vlm(image_path, prompt, max_tokens=512):
         response.raise_for_status()
 
         # Stream and collect response
-        print("[STREAMING VLM RESPONSE]")
+        print("[STREAMING ONLINE VLM RESPONSE]")
         print("-" * 50)
         full_response = ""
         for line in response.iter_lines():
@@ -318,7 +319,7 @@ def call_online_vlm(image_path, prompt, max_tokens=512):
                     pass
         print()  # New line when done
         print("-" * 50)
-        print("[VLM RESPONSE COMPLETE]")
+        print("[ONLINE VLM RESPONSE COMPLETE]")
 
         if len(full_response) > 0:
             return full_response
@@ -329,6 +330,76 @@ def call_online_vlm(image_path, prompt, max_tokens=512):
     except Exception as e:
         print(f"[ERROR] Online VLM API call failed: {e}")
         return None
+
+
+def call_local_vlm_service(service_url, prompt, image_path, stream=False):
+    """
+    Call the VLM service with a prompt and base64 encoded image.
+    
+    Args:
+        service_url: URL of the VLM service (e.g., "http://172.27.15.55:5004")
+        prompt: Text prompt for the VLM
+        image_base64: Base64 encoded image string
+        stream: Whether to use streaming response
+    
+    Returns:
+        Response from the VLM service (dict for non-streaming, generator for streaming)
+    """
+    image_base64 = encode_image_to_base64(image_path)    
+    try:
+        # Prepare the payload
+        payload = {
+            "prompt": prompt,
+            "image": image_base64,
+            "stream": stream
+        }
+        
+        # Make the request
+        response = requests.post(
+            f"{service_url}/analyze",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=60,  # 60 seconds timeout
+            stream=stream  # Enable streaming for requests
+        )
+
+        full_response = "" 
+        # Check if request was successful
+        if response.status_code == 200:
+            print("[STREAMING LOCAL VLM RESPONSE]")
+            print("-" * 50)
+            try:
+                for line in response.iter_lines(decode_unicode=True):
+                    if line and line.startswith('data: '):
+                        data_str = line[6:]  # Remove 'data: ' prefix
+                        if data_str.strip():  # Skip empty data
+                            try:
+                                data = json.loads(data_str)
+                                if 'token' in data:
+                                    token = data['token']
+                                    print(token, end='', flush=True)
+                                    full_response += token
+                                elif data.get('done'):
+                                    break
+                            except json.JSONDecodeError:
+                                continue
+            except Exception as e:
+                print(f"[Error] handling streaming response: {e}")
+                return None
+
+            print()  # New line when done
+            print("-" * 50)
+            print("[LOCAL VLM RESPONSE COMPLETE]")
+
+        if len(full_response) > 0:
+            return full_response
+        else:
+            print(f"[ERROR] No response content found from local VLM")
+            return None            
+    except Exception as e:
+        print(f"[ERROR] Local VLM API call failed:  {e}")
+        return None
+
 
 def call_online_llm(prompt, max_tokens=512):
     """
@@ -790,16 +861,16 @@ def step1_vision_analysis(image_path, force_reanalyze=False):
     Returns:
         tuple: (objects_list, relationships_str) or (None, None) if error
     """
-    global online_vlm_initialized
+    # global online_vlm_initialized
     global cached_image_path, cached_step1_objects, cached_step1_relationships
     
     print("\n" + "="*60)
     print("🔍 STEP 1: VISION ANALYSIS (Using Qwen2.5-VL-72B)")
     print("="*60)
     
-    if not online_vlm_initialized:
-        print("[ERROR] Online VLM not initialized. Please run load_vision_model() first.")
-        return None, None
+    # if not online_vlm_initialized:
+    #     print("[ERROR] Online VLM not initialized. Please run load_vision_model() first.")
+    #     return None, None
     
     # Check cache first
     if not force_reanalyze and cached_image_path == image_path and cached_step1_objects is not None:
@@ -848,13 +919,16 @@ def step1_vision_analysis(image_path, force_reanalyze=False):
 
     # Call online VLM API
     start_time = time.time()
-    print("[INFO] Running STEP 1 online vision analysis... ⏳")
-    
+    print("[INFO] Running STEP 1 vision analysis... ⏳\n")
     response = call_online_vlm(image_path, prompt, max_tokens=1024)
-    
     if response is None:
-        print("[ERROR] Failed to get response from online VLM")
-        return None, None
+        print("[ERROR] Failed to get response from online VLM")  
+        # Call local VLM API
+        response = call_local_vlm_service(SERVICE_URL, prompt, image_path, stream=True)
+        if response is None:
+            print("[ERROR] Failed to get response from local VLM")
+            return None, None
+
 
     end_time = time.time()
     print(f"[INFO] ✅ STEP 1 completed in {end_time - start_time:.1f} seconds")
@@ -887,7 +961,7 @@ def step2_syntax_validation(objects_list, relationships_str):
     global cached_step2_objects, cached_step2_relationships
     
     print("\n" + "="*60)
-    print("✅ STEP 2: SYNTAX VALIDATION & SPATIAL CONSISTENCY CHECK")
+    print("✅ STEP 2: SYNTAX VALIDATION & SPATIAL CONSISTENCY CHECK\n")
     print("="*60)
     
     validated_objects = []
@@ -1413,10 +1487,10 @@ def robot_action_planner(task_description, image_path, output_format="json", for
             print("\n🚀 Starting Enhanced Robot Action Planner with 4-Step Pipeline (Online API)")
         
         # Initialize online vision service
-        if not load_vision_model():
-            if quiet or (capture_output and not quiet):
-                sys.stdout = original_stdout
-            raise RuntimeError("Failed to initialize online vision service.")
+        # if not load_vision_model():
+        #     if quiet or (capture_output and not quiet):
+        #         sys.stdout = original_stdout
+        #     raise RuntimeError("Failed to initialize online vision service.")
         
         # Run the complete 4-step pipeline
         final_objects, final_relationships, final_plan = run_complete_4step_pipeline(

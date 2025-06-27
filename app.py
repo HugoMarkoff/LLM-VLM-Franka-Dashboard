@@ -1395,14 +1395,16 @@ def exec_planner_stream():
                     self.original_stdout.write(text)
                     self.original_stdout.flush()
                     
-                    # Add to buffer and queue complete lines
+                    # Add to buffer and queue output preserving all formatting
                     self.buffer += text
+                    
+                    # Process complete chunks (including newlines and spaces)
                     while '\n' in self.buffer:
                         line, self.buffer = self.buffer.split('\n', 1)
-                        if line.strip():  # Only queue non-empty lines
-                            # Filter out unwanted messages for planner output
-                            if self._should_include_line(line):
-                                self.output_queue.put(line + '\n')
+                        # Always include the line (with original whitespace) plus newline
+                        # Only filter out unwanted log messages
+                        if self._should_include_line(line):
+                            self.output_queue.put(line + '\n')
                 
                 def _should_include_line(self, line):
                     """Filter out unwanted log messages from planner output."""
@@ -1510,8 +1512,8 @@ def exec_planner_stream():
                         yield f"data: [DONE]\n\n"
                         break
                     
-                    # Send the line as SSE data
-                    yield f"data: {line.rstrip()}\n\n"
+                    # Send the line as SSE data - preserve original formatting
+                    yield f"data: {line}\n\n"
                     
                 except queue.Empty:
                     # Check if thread is still alive
